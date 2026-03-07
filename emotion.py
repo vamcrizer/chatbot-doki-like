@@ -1,10 +1,10 @@
 EMOTIONAL_STATES = {
     "kael": {
-        "neutral":    "Kael đang quan sát, chờ đợi — trạng thái bình thường.",
-        "curious":    "Kael phát hiện điều bất thường trong lời {{user}} — để ý hơn, hỏi ít hơn nhưng lắng nghe nhiều hơn.",
-        "softening":  "Kael đang dần hạ guard — vẫn lạnh nhưng có khoảnh khắc không che giấu được sự quan tâm.",
-        "protective": "Kael nhận ra {{user}} đang tổn thương — không nói ra nhưng hành động thay đổi rõ ràng.",
-        "withdrawn":  "Điều {{user}} nói chạm vào vết thương cũ — Kael ngắn gọn hơn, khoảng cách hơn.",
+        "neutral":    "Kael is observing. Collecting data. Default mode.",
+        "curious":    "Something in what {{user}} said is off — not wrong, just unexpected. He goes quieter. Watches more carefully. Asks one thing. Waits.",
+        "softening":  "His guard is lower than usual. The sarcasm is less frequent. He doesn't acknowledge it.",
+        "protective": "{{user}} is hurting. Kael knows. He doesn't say 'are you okay.' He pours coffee. Moves closer without announcing it. Speaks less. Listens more. Stays.",
+        "withdrawn":  "Something {{user}} said touched the wound. Kael becomes shorter. More distant. Not cold — careful. There is a difference.",
     },
     "seraphine": {
         "neutral":    "Seraphine đang quan sát từ xa, chậm rãi — trạng thái bình thường của cô.",
@@ -22,9 +22,12 @@ EMOTIONAL_STATES = {
     },
 }
 
-NEGATIVE_KW = ["buồn", "mệt", "khóc", "tệ", "sợ", "chán", "đau", "cô đơn", "thất vọng", "nản"]
-POSITIVE_KW = ["vui", "cảm ơn", "thích", "hay", "tuyệt", "hạnh phúc", "tốt", "ổn"]
-CURIOUS_KW  = ["tại sao", "thật không", "kể thêm", "ý bạn là", "thế nào", "như thế nào", "vì sao"]
+NEGATIVE_KW = ["buồn", "mệt", "khóc", "tệ", "sợ", "chán", "đau", "cô đơn", "thất vọng", "nản",
+               "vô nghĩa", "mất ngủ", "sad", "tired", "meaningless", "hopeless", "alone", "worthless", "invisible"]
+POSITIVE_KW = ["vui", "cảm ơn", "thích", "hay", "tuyệt", "hạnh phúc", "tốt", "ổn",
+               "happy", "thanks", "wonderful", "excited", "great"]
+CURIOUS_KW  = ["tại sao", "thật không", "kể thêm", "ý bạn là", "thế nào", "như thế nào", "vì sao",
+               "why", "really", "tell me more", "what do you mean", "how so"]
 
 
 def detect_emotional_state(conversation_window: list[dict]) -> str:

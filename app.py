@@ -1,9 +1,44 @@
 import streamlit as st
 import time
+from datetime import datetime
 from characters import CHARACTERS
 from conversation import ConversationManager
 from prompt_builder import build_messages_full
 from cerebras_client import chat_stream
+
+# ── Export helper ───────────────────────────────────────────
+def build_export_txt(
+    char_name: str,
+    user_name: str,
+    opening: str,
+    messages: list[dict],
+    total_turns: int,
+) -> str:
+    lines = []
+    lines.append("=" * 60)
+    lines.append(f"AI Companion Demo — Chat Export")
+    lines.append(f"Nhân vật : {char_name}")
+    lines.append(f"Người dùng: {user_name}")
+    lines.append(f"Thời gian : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Turns     : {total_turns}")
+    lines.append("=" * 60)
+    lines.append("")
+    lines.append("[OPENING SCENE]")
+    lines.append(opening)
+    lines.append("")
+    lines.append("-" * 60)
+    lines.append("")
+    for msg in messages:
+        if msg["role"] == "user":
+            lines.append(f"[{user_name.upper()}]")
+        else:
+            lines.append(f"[{char_name.upper()}]")
+        lines.append(msg["content"])
+        lines.append("")
+    lines.append("=" * 60)
+    lines.append("END OF SESSION")
+    return "\n".join(lines)
+
 
 # ── Page config ───────────────────────────────────────────────
 st.set_page_config(
@@ -52,6 +87,31 @@ with st.sidebar:
         st.session_state.conv.clear()
         st.session_state.messages_display = []
         st.rerun()
+
+    # Xuất chat
+    if st.session_state.messages_display:
+        _export_char = CHARACTERS[st.session_state.character_key]
+        _export_opening = _export_char["opening_scene"].replace(
+            "{{user}}", st.session_state.user_name
+        )
+        _export_txt = build_export_txt(
+            char_name=_export_char["name"],
+            user_name=st.session_state.user_name,
+            opening=_export_opening,
+            messages=st.session_state.messages_display,
+            total_turns=st.session_state.conv.total_turns,
+        )
+        _filename = (
+            f"chat_{_export_char['name'].replace(' ', '_')}"
+            f"_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        )
+        st.download_button(
+            label="📄 Xuất chat (.txt)",
+            data=_export_txt.encode("utf-8"),
+            file_name=_filename,
+            mime="text/plain",
+            use_container_width=True,
+        )
 
     # Reset khi đổi nhân vật hoặc tên user
     if (
