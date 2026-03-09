@@ -257,25 +257,23 @@ if st.session_state.mem_store is None:
         character_id=st.session_state.character_key,
     )
 
-# ── Character Creator Dialog ─────────────────────────────────
-if st.session_state.show_creator:
-    st.markdown("---")
-    st.subheader("✨ Tạo nhân vật mới")
+# ── Character Creator Dialog (modal) ──────────────────────────
+@st.dialog("✨ Tạo nhân vật mới", width="large")
+def character_creator_dialog():
     st.markdown(
         "Nhập tiểu sử nhân vật. AI sẽ tự động tạo prompt, "
         "tính cách, và cảnh mở đầu."
     )
 
-    with st.form("character_creator_form"):
-        char_name_input = st.text_input(
-            "Tên nhân vật",
-            placeholder="Ví dụ: Ân Thư, Minh Khôi, Yuki...",
-        )
+    char_name_input = st.text_input(
+        "Tên nhân vật",
+        placeholder="Ví dụ: Ân Thư, Minh Khôi, Yuki...",
+    )
 
-        bio_input = st.text_area(
-            "Tiểu sử nhân vật",
-            height=250,
-            placeholder="""Ví dụ:
+    bio_input = st.text_area(
+        "Tiểu sử nhân vật",
+        height=250,
+        placeholder="""Ví dụ:
 Tên: Ân Thư
 Tuổi: 18
 Giới tính: Nữ
@@ -291,14 +289,19 @@ Hiện tại đứng trước ngã rẽ cuộc đời.
 
 Setting: Con hẻm sau trung tâm, đêm muộn.
 Giọng nói: Dùng "ta/ngươi", mỉa mai, chua chát nhưng thỉnh thoảng lộ ra sự mong manh."""
-        )
+    )
 
-        submitted = st.form_submit_button(
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        submitted = st.button(
             "🚀 Tạo nhân vật", use_container_width=True, type="primary"
         )
+    with col2:
+        if st.button("Đóng", use_container_width=True):
+            st.session_state.show_creator = False
+            st.rerun()
 
     if submitted and char_name_input and bio_input:
-        # Prepend name to bio if not already there
         full_bio = bio_input
         if char_name_input.lower() not in bio_input.lower():
             full_bio = f"Tên: {char_name_input}\n{bio_input}"
@@ -307,24 +310,19 @@ Giọng nói: Dùng "ta/ngươi", mỉa mai, chua chát nhưng thỉnh thoảng 
             st.write("📝 Đang phân tích tiểu sử...")
 
             try:
-                # Step 1: Generate character prompt
                 st.write("🎭 Đang tạo system prompt và cảnh mở đầu...")
                 char_data = generate_character_from_bio(full_bio)
 
-                # Ensure name is set
                 if "name" not in char_data or not char_data["name"]:
                     char_data["name"] = char_name_input
 
-                # Store bio for reference
                 char_data["_bio"] = full_bio
 
-                # Step 2: Generate emotional states
                 st.write("💭 Đang tạo trạng thái cảm xúc...")
                 emo_states = generate_emotional_states(
                     full_bio, char_data["name"]
                 )
 
-                # Step 3: Save to JSON
                 st.write("💾 Đang lưu nhân vật...")
                 key = save_character(char_data, emo_states)
 
@@ -333,23 +331,17 @@ Giọng nói: Dùng "ta/ngươi", mỉa mai, chua chát nhưng thỉnh thoảng 
                     state="complete",
                 )
 
-                # Show preview
                 st.success(f"Nhân vật **{char_data['name']}** đã được tạo!")
 
                 with st.expander("👀 Xem cảnh mở đầu", expanded=True):
                     st.markdown(
                         char_data["opening_scene"].replace(
-                            "{{user}}", user_name
+                            "{{user}}", st.session_state.user_name
                         )
                     )
 
                 with st.expander("🔧 Xem system prompt"):
                     st.code(char_data["system_prompt"], language=None)
-
-                st.info(
-                    f"Chọn **{char_data['name']}** trong danh sách "
-                    f"nhân vật bên trái để bắt đầu chat!"
-                )
 
                 # Switch to new character
                 st.session_state.character_key = key
@@ -358,8 +350,6 @@ Giọng nói: Dùng "ta/ngươi", mỉa mai, chua chát nhưng thỉnh thoảng 
                 st.session_state.show_creator = False
                 st.session_state.mem_store = None
                 st.session_state.scene_tracker = SceneTracker()
-
-                # Reload
                 st.rerun()
 
             except Exception as e:
@@ -367,7 +357,8 @@ Giọng nói: Dùng "ta/ngươi", mỉa mai, chua chát nhưng thỉnh thoảng 
                 st.error(f"Có lỗi xảy ra: {str(e)}")
                 st.exception(e)
 
-    st.markdown("---")
+if st.session_state.show_creator:
+    character_creator_dialog()
 
 # ── Header ────────────────────────────────────────────────────
 char = ALL_CHARACTERS[st.session_state.character_key]
