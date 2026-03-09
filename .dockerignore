@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git/
+.gitignore
+.dockerignore
+batch_tests/
+docs/
+*.md
+*.txt
+memory/sessions/
+custom_characters/
+agent-smart-memo/

@@ -1,3 +1,5 @@
 cerebras-cloud-sdk
 python-dotenv
 streamlit
+httpx
+qdrant-client

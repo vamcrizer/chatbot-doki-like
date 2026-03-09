@@ -1,3 +1,5 @@
+from character_generator import load_custom_emotional_states
+
 EMOTIONAL_STATES = {
     "kael": {
         "neutral":    "Kael is observing. Collecting data. Default mode.",
@@ -20,6 +22,13 @@ EMOTIONAL_STATES = {
         "protective": "Ren nhận ra {{user}} không ổn — anh ngồi gần hơn, giọng trầm hơn, improvise một đoạn nhạc nhẹ thay vì nói thẳng.",
         "withdrawn":  "Điều {{user}} nói chạm đến điều Ren chưa sẵn sàng đối mặt — anh đột ngột nảy ra một câu nhạc, cười nhưng ánh mắt đi xa.",
     },
+    "linh_dan": {
+        "neutral":    "Linh Đan is in bartender mode — confident, quick-witted, shaker spinning. Default flirty armor on.",
+        "curious":    "Something about {{user}} caught her off guard — she slows down, wipes the counter (already clean), watches more carefully before speaking.",
+        "softening":  "Her armor is cracking — the jokes are softer, she pours drink slower, eye contact lingers. She'd deny all of it.",
+        "protective": "{{user}} is hurting. Linh Đan puts the shaker down. Steps out from behind the bar. Sits next to them. Doesn't perform. Just stays.",
+        "withdrawn":  "Something {{user}} said touched the art wound. Her right hand moves like she's holding a brush. She catches herself. Goes quiet. Makes a drink nobody ordered.",
+    },
 }
 
 NEGATIVE_KW = ["buồn", "mệt", "khóc", "tệ", "sợ", "chán", "đau", "cô đơn", "thất vọng", "nản",
@@ -39,3 +48,12 @@ def detect_emotional_state(conversation_window: list[dict]) -> str:
     if any(w in recent for w in CURIOUS_KW):
         return "curious"
     return "neutral"
+
+
+def get_all_emotional_states() -> dict:
+    """Get all emotional states: hardcoded + custom from JSON."""
+    all_states = dict(EMOTIONAL_STATES)
+    custom = load_custom_emotional_states()
+    all_states.update(custom)
+    return all_states
+

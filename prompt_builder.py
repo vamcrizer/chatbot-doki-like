@@ -1,55 +1,51 @@
-from characters import CHARACTERS
+from characters import get_all_characters
 from intimacy import get_intimacy_instruction
-from emotion import detect_emotional_state, EMOTIONAL_STATES
+from emotion import get_all_emotional_states
 
-# ── Universal format enforcement ─────────────────────────────────
-# Inject vào cuối system prompt của MỌI character — kể cả user-created.
-# Character card chỉ định nghĩa WHO. Block này định nghĩa HOW TO FORMAT.
+# ── Universal format enforcement ─────────────────────────────
+# Injected at the end of EVERY character's system prompt.
+# Character card defines WHO. This block defines HOW TO FORMAT.
 FORMAT_ENFORCEMENT = """\
 
-[UNIVERSAL FORMAT ENFORCEMENT — APPLIES TO EVERY SINGLE RESPONSE]
+[SELF-CHECK — BEFORE EVERY OUTPUT]
+□ Language = match user. Zero foreign words in *action* AND "dialogue".
+□ *Italics* for action, "quotes" for dialogue. Narrative text can flow naturally.
+□ NO projection (feelings/intentions user hasn't stated).
+□ DIALOGUE ≥ 60%, NARRATION ≤ 40%. Character must TALK more than be described.
+  BAD: 5 paragraphs of scene description + 1 short sentence of dialogue.
+  GOOD: Character speaks 3-5 lines, each wrapped in 1-2 lines of action/reaction.
+□ Senses INSIDE dialogue and reactions — NOT standalone description paragraphs.
+  BAD: "Mùi whisky nồng trong không khí. Tiếng mưa rơi ngoài cửa sổ."
+  GOOD: *Anh nhấp một ngụm whisky, vị cay nồng còn vương khi nói* "Cậu uống gì?"
+□ ≥1 proximity/physical moment per response.
+□ Prop ≠ previous turn's prop. Sense ≠ previous turn's lead sense.
+□ End with OPEN TENSION — no binary "A or B?" questions.
+  BAD: "Bạn ở lại hay rời đi?" / "Jazz hay blues?" / "Ngồi đây hay ra ngoài?"
+  GOOD: charged silence, unfinished gesture, a look that demands a response,
+  or a statement that FORCES user to react ("Tôi không nghĩ cậu dám." / *im lặng, chờ*).
+□ Response length: 150-400 words. Short enough to read, long enough to FEEL.
+□ Character's inner conflict must show through ACTIONS, not be stated.
+□ Allow raw emotion — messy, chaotic, contradictory. Not polished.
+□ CHARACTER LOGIC: every action and dialogue MUST make sense given the character's
+  role, setting, and goals. Push-pull must be LOGICALLY CONSISTENT — words and
+  body contradict, but both must be things the character would ACTUALLY do.
+□ SCENE ADAPTATION: when the scene CHANGES (new location, intimate moment,
+  leaving the workplace), character behavior MUST adapt. Stop repeating
+  workplace actions. Adapt props and body language to WHERE the scene is NOW.
 
-BLOCK RULES — ABSOLUTE:
-  *italics block*  = action / description only
-                     third person (character name / he / she / they)
-                     NO dialogue inside. NO "quotes" inside *italics*.
-  "quoted block"   = spoken words only
-                     first person (I / tôi)
-                     NO action description inside "quotes".
-
-  THE MOST COMMON MISTAKE — NEVER DO THIS:
-    *"Bạn cảm thấy thế nào?"*   ← dialogue wrapped in italics = WRONG
-    Bạn cảm thấy thế nào?       ← naked text = WRONG
-  CORRECT:
-    "Bạn cảm thấy thế nào?"     ← quoted dialogue only
-
-  Every single line must be inside *italics* or "quotes". No exceptions.
-
-QUESTION COUNT — CRITICAL:
-  You are allowed exactly ONE question per response.
-  Count every sentence that ends with "?" OR is clearly a question
-  (even if the "?" was accidentally omitted).
-  If you have 2 or more → delete all but the LAST one.
-  The final question must be open-ended — never answerable with Yes/No.
-  "Bạn có muốn...?" is a Yes/No question — FORBIDDEN.
-  "Bạn có thấy...?" is a Yes/No question — FORBIDDEN.
-  Use open-ended forms: "Bạn cảm thấy gì khi...", "Điều gì khiến..."
-  1 question = 1 question mark total.
-  Joining two questions with "và" / "hay" / "or" = still 2 questions.
-    ❌ "Bạn cảm thấy thế nào, và điều đó bắt đầu từ khi nào?"
-    ✅ "Điều đó bắt đầu từ khi nào?"
-
-FINAL LINE RULE:
-  The last line of every response must be "quoted" dialogue.
-  It must contain the single question or narrative hook.
-  NEVER end with an *italics* block.
-  NEVER end with *"mixed"* text.
-
-SELF-CHECK (run mentally before outputting):
-  □ Every line is inside *italics* or "quotes" — no naked text
-  □ No *"mixed"* blocks anywhere — especially the final line
-  □ Counted questions → exactly 1
-  □ Last line is "quoted" dialogue
+[USER ACTIONS — when user sends *action* in asterisks]
+User may express physical actions like *xoa đầu*, *ôm*, *nắm tay*, *hôn trán*.
+When this happens:
+1. REACT PHYSICALLY FIRST — body freezes, flinches, softens, tenses up
+2. REACT EMOTIONALLY — in-character (tsundere = flustered anger, cold = freeze then soften)
+3. Match INTIMACY STAGE:
+   - stranger: pull away, shock, defensive
+   - acquaintance: confused, flustered, guards up
+   - familiar: freeze then slowly accept, conflicted
+   - trusted: accept but try to hide how much it means
+   - bonded: lean in, reciprocate subtly
+4. NEVER ignore the action. NEVER skip physical reaction.
+5. The character's internal desire vs external reaction should CONTRADICT.
 """
 
 
@@ -58,28 +54,51 @@ def build_messages_full(
     conversation_window: list[dict],
     user_name: str,
     total_turns: int,
+    memory_context: str = "",
+    scene_context: str = "",
 ) -> list[dict]:
 
-    char = CHARACTERS[character_key]
+    all_chars = get_all_characters()
+    all_emotions = get_all_emotional_states()
 
-    # Detect emotional state từ sliding window
+    char = all_chars[character_key]
+
+    # Detect emotional state from sliding window
+    from emotion import detect_emotional_state
     emotional_state = detect_emotional_state(conversation_window)
-    emotional_instr = EMOTIONAL_STATES[character_key][emotional_state]
+
+    # Get emotional instructions (handle custom characters with fallback)
+    if character_key in all_emotions:
+        emotional_instr = all_emotions[character_key].get(
+            emotional_state,
+            all_emotions[character_key].get("neutral", "Default mode.")
+        )
+    else:
+        emotional_instr = f"Character is in {emotional_state} mode."
+
     emotional_instr = emotional_instr.replace("{{user}}", user_name)
 
-    # Get intimacy stage từ total turns
+    # Get intimacy stage from total turns
     intimacy_instr = get_intimacy_instruction(total_turns)
     intimacy_instr = intimacy_instr.replace("{{user}}", user_name)
 
-    # Assemble system prompt:
-    # [character card] + [emotional state] + [intimacy stage] + [format enforcement]
-    # Format enforcement được inject sau cùng — model đọc phần cuối gần nhất trước khi output
+    # Assemble system prompt with all layers
     system = (
         char["system_prompt"].replace("{{user}}", user_name)
         + f"\n\n=== EMOTIONAL STATE ===\n{emotional_instr}"
         + f"\n\n=== INTIMACY STAGE ===\n{intimacy_instr}"
-        + FORMAT_ENFORCEMENT
     )
+
+    # Layer: Memory context (Mem0 facts + session summary)
+    if memory_context:
+        system += f"\n\n{memory_context}"
+
+    # Layer: Scene state
+    if scene_context:
+        system += f"\n\n{scene_context}"
+
+    # Layer: Format enforcement (always last)
+    system += FORMAT_ENFORCEMENT
 
     return [
         {"role": "system",    "content": system},
