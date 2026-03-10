@@ -5,7 +5,7 @@ from datetime import datetime
 from characters import get_all_characters
 from conversation import ConversationManager
 from prompt_builder import build_messages_full
-from cerebras_client import chat_stream
+from cerebras_client import chat_stream, MODEL
 from character_generator import (
     generate_character_from_bio,
     generate_emotional_states,
@@ -17,6 +17,8 @@ from memory.scene_tracker import SceneTracker
 from memory.mem0_store import create_memory_store
 from memory.fact_extractor import extract_facts, extract_facts_lightweight
 from memory.summarizer import summarize_conversation
+from affection_state import AffectionState, extract_affection_update, PacingConfig, PACING_PRESETS
+from response_processor import post_process_response
 
 # ── Export helper ───────────────────────────────────────────
 def build_export_txt(
@@ -92,7 +94,7 @@ def async_memory_update(mem_store, user_msg, assistant_msg, character_name,
     try:
         # 1. Extract facts from this turn
         existing = [m["text"] for m in mem_store.get_all()]
-        facts = extract_facts(user_msg, assistant_msg, existing)
+        facts = extract_facts(user_msg, assistant_msg, existing, character_name=character_name)
 
         # Also grab lightweight facts (instant, no LLM)
         light_facts = extract_facts_lightweight(user_msg)
@@ -148,6 +150,8 @@ if "scene_tracker" not in st.session_state:
     st.session_state.scene_tracker = SceneTracker()
 if "mem_store" not in st.session_state:
     st.session_state.mem_store = None  # initialized when character selected
+if "affection" not in st.session_state:
+    st.session_state.affection = AffectionState()
 
 # ── Load characters dynamically ──────────────────────────────
 ALL_CHARACTERS = get_all_characters()
@@ -193,8 +197,8 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.caption("Model: **gpt-oss-120b**")
-    st.caption("Provider: **Cerebras Inference**")
+    st.caption(f"Model: **{MODEL}**")
+    st.caption("Provider: **LM Studio (local)**")
 
     # Memory status
     if st.session_state.mem_store:
@@ -204,12 +208,20 @@ with st.sidebar:
         st.caption(f"🧠 Memories: **{mem_count}** | Summary: **{'✅' if has_summary else '—'}**")
         st.caption(f"📍 Scene: **{scene}**")
 
+    # Affection status bar
+    if st.session_state.conv.total_turns > 0:
+        st.divider()
+        st.markdown("##### 💫 Character State")
+        status_bar = st.session_state.affection.to_status_bar()
+        st.text(status_bar)
+
     st.divider()
 
     if st.button("🗑️ Xóa lịch sử chat", use_container_width=True):
         st.session_state.conv.clear()
         st.session_state.messages_display = []
         st.session_state.scene_tracker = SceneTracker()
+        st.session_state.affection = AffectionState()
         # Don't clear mem_store — memories persist across sessions!
         st.rerun()
 
@@ -249,6 +261,7 @@ with st.sidebar:
         st.session_state.user_name = user_name
         st.session_state.scene_tracker = SceneTracker()
         st.session_state.mem_store = None  # re-init for new char
+        st.session_state.affection = AffectionState()
 
 # ── Initialize memory store for current character ─────────────
 if st.session_state.mem_store is None:
@@ -397,6 +410,9 @@ if user_input := st.chat_input(f"Nhắn tin với {char['name']}..."):
         st.session_state.user_name,
     )
 
+    # Build affection context
+    affection_context = st.session_state.affection.to_prompt_block()
+
     # Adaptive window: shrink when memory fills the gap
     has_memory = bool(memory_context)
 
@@ -406,7 +422,7 @@ if user_input := st.chat_input(f"Nhắn tin với {char['name']}..."):
         user_name=st.session_state.user_name,
         total_turns=st.session_state.conv.total_turns,
         memory_context=memory_context,
-        scene_context=scene_context,
+        scene_context=scene_context + affection_context,
     )
 
     with st.chat_message("assistant"):
@@ -416,26 +432,41 @@ if user_input := st.chat_input(f"Nhắn tin với {char['name']}..."):
         )
         elapsed = time.time() - start
 
-        # Show scene + memory info
+        # Post-process response (POV fix)
+        response = post_process_response(response, char["name"])
+
+        # Show scene + memory + affection info
+        aff = st.session_state.affection
         scene_label = st.session_state.scene_tracker.current_scene
         mem_count = len(st.session_state.mem_store.get_all())
-        st.caption(f"⚡ {elapsed:.2f}s · gpt-oss-120b · 📍{scene_label} · 🧠{mem_count}")
+        mood_icon = {"neutral": "😐", "curious": "🤔", "warm": "😊", "flustered": "😳", "aroused": "🥰", "vulnerable": "🥺", "guarded": "😶", "fearful": "😨", "hurt": "😢", "trusting": "💛", "playful": "😏", "tender": "🥹"}.get(aff.mood, "😐")
+        st.caption(f"⚡ {elapsed:.2f}s · {MODEL} · 📍{scene_label} · 🧠{mem_count} · {mood_icon}{aff.mood} · 💗{aff.desire_level}/10")
 
     st.session_state.conv.add_assistant(response)
     st.session_state.messages_display.append(
         {"role": "assistant", "content": response}
     )
 
-    # Async memory update (non-blocking)
-    threading.Thread(
-        target=async_memory_update,
-        args=(
+    # Async memory + affection update (non-blocking)
+    _affection_ref = st.session_state.affection
+    _char_name = char["name"]
+    def _async_updates():
+        async_memory_update(
             st.session_state.mem_store,
             user_input,
             response,
-            char["name"],
+            _char_name,
             st.session_state.conv.history,
             st.session_state.conv.total_turns,
-        ),
-        daemon=True,
-    ).start()
+        )
+        # Update affection state
+        try:
+            _pacing = PACING_PRESETS.get(char.get("pacing", "normal"), PACING_PRESETS["normal"])
+            updated = extract_affection_update(
+                _affection_ref, user_input, response, _char_name, pacing=_pacing,
+            )
+            st.session_state.affection = updated
+        except Exception as e:
+            print(f"[Affection] Update error: {e}")
+
+    threading.Thread(target=_async_updates, daemon=True).start()

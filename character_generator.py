@@ -5,7 +5,7 @@ Saves characters as JSON files in custom_characters/ directory.
 import os
 import json
 from datetime import datetime
-from cerebras_client import client, MODEL
+from cerebras_client import chat_complete
 
 CUSTOM_DIR = os.path.join(os.path.dirname(__file__), "custom_characters")
 os.makedirs(CUSTOM_DIR, exist_ok=True)
@@ -73,6 +73,18 @@ Return ONLY the JSON. No markdown, no explanation.
 """
 
 
+def _parse_llm_json(raw: str) -> dict:
+    """Parse JSON from LLM response, stripping markdown code blocks if present."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1]  # Remove first line
+        if raw.endswith("```"):
+            raw = raw[:-3]
+        elif "```" in raw:
+            raw = raw[:raw.rfind("```")]
+    return json.loads(raw.strip())
+
+
 def generate_character_from_bio(bio: str) -> dict:
     """Generate a complete character dict from a bio using LLM."""
     messages = [
@@ -80,24 +92,8 @@ def generate_character_from_bio(bio: str) -> dict:
         {"role": "user", "content": f"CHARACTER BIO:\n{bio}"},
     ]
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        temperature=0.7,
-        max_completion_tokens=8192,
-    )
-
-    raw = response.choices[0].message.content.strip()
-
-    # Strip markdown code blocks if present
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]  # Remove first line
-        if raw.endswith("```"):
-            raw = raw[:-3]
-        elif "```" in raw:
-            raw = raw[:raw.rfind("```")]
-
-    return json.loads(raw)
+    raw = chat_complete(messages, temperature=0.7, max_tokens=4096)
+    return _parse_llm_json(raw)
 
 
 def generate_emotional_states(bio: str, name: str) -> dict:
@@ -107,22 +103,8 @@ def generate_emotional_states(bio: str, name: str) -> dict:
         {"role": "user", "content": f"CHARACTER: {name}\nBIO:\n{bio}"},
     ]
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        temperature=0.7,
-        max_completion_tokens=2048,
-    )
-
-    raw = response.choices[0].message.content.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        if raw.endswith("```"):
-            raw = raw[:-3]
-        elif "```" in raw:
-            raw = raw[:raw.rfind("```")]
-
-    return json.loads(raw)
+    raw = chat_complete(messages, temperature=0.7, max_tokens=2048)
+    return _parse_llm_json(raw)
 
 
 def save_character(character_data: dict, emotional_states: dict) -> str:

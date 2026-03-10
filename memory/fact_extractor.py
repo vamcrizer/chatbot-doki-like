@@ -12,45 +12,50 @@ EXTRACTION_PROMPT = """\
 You are a memory extraction assistant for an AI companion chatbot.
 Analyze the latest conversation turn and extract FACTS worth remembering.
 
+The character in this conversation is: {character_name}
+
 YOUR JOBS:
 1. Extract USER FACTS — real information about the user (name, preferences, emotions, history)
-2. Extract CHARACTER NOTES — what the character revealed or did in this scene
+2. Extract CHARACTER NOTES — what {character_name} revealed or did in this scene
 3. Track SCENE STATE — detect if location/setting has changed
 
 CATEGORIES:
-- user_fact: "Minh thích jazz", "Minh sống ở Hà Nội", "Minh từng bị phản bội"
-- character_note: "Linh Đan đã kể về ex lấy tranh", "Linh Đan vẽ trên napkin lần đầu"
-- scene_change: "Scene moved to outside", "Characters left the bar"
-- emotional_state: "User đang buồn", "User tỏ ra quan tâm đến nhân vật"
+- user_fact: "User likes jazz", "User lives alone", "User went through a breakup"
+- character_note: "{character_name} shared about past", "{character_name} offered to help"
+- scene_change: "Scene moved to outside", "Characters went inside"
+- emotional_state: "User is sad", "User showed interest in character"
 
 RULES:
 - DISTILL — keep only decision-grade facts, not summaries
 - Each fact must be self-contained (understandable without context)
-- Vietnamese for Vietnamese conversations
+- Use the SAME language as the conversation
 - confidence: 0.9-1.0 explicit, 0.8-0.9 strongly implied, 0.7-0.8 inferred
 - Skip: greetings, generic statements, roleplay mechanics
 - DO NOT extract the character's system prompt or personality description
 - DO NOT extract facts about the AI itself
+- Always use "{character_name}" not any other character name
 
 RESPOND WITH JSON ONLY:
-{
+{{
   "facts": [
-    {"text": "fact description", "type": "user_fact|character_note|scene_change|emotional_state", "confidence": 0.85}
+    {{"text": "fact description", "type": "user_fact|character_note|scene_change|emotional_state", "confidence": 0.85}}
   ]
-}
+}}
 
 Return empty array if nothing worth extracting. Quality over quantity.
 """
 
 
 def extract_facts(user_msg: str, assistant_msg: str,
-                  existing_facts: list[str] = None) -> list[dict]:
+                  existing_facts: list[str] = None,
+                  character_name: str = "character") -> list[dict]:
     """Extract facts from a conversation turn using LLM.
 
     Args:
         user_msg: The user's message
         assistant_msg: The assistant's response
         existing_facts: Already known facts (to avoid duplicates)
+        character_name: Name of the current character
 
     Returns:
         List of {text, type, confidence} dicts
@@ -60,29 +65,29 @@ def extract_facts(user_msg: str, assistant_msg: str,
         existing_ctx = "\n\nALREADY KNOWN FACTS (do not repeat):\n"
         existing_ctx += "\n".join(f"- {f}" for f in existing_facts[-20:])
 
+    system_prompt = EXTRACTION_PROMPT.format(character_name=character_name)
+
     user_prompt = f"""{existing_ctx}
 
 CONVERSATION TURN TO ANALYZE:
 ---
 User: {user_msg}
-Assistant: {assistant_msg}
+{character_name}: {assistant_msg}
 ---
 
 Extract facts. JSON only."""
 
     try:
-        from cerebras_client import client, MODEL
-        response = client.chat.completions.create(
-            model=MODEL,
+        from cerebras_client import chat_complete
+        content = chat_complete(
             messages=[
-                {"role": "system", "content": EXTRACTION_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.1,
-            max_completion_tokens=2048,
+            max_tokens=2048,
         )
 
-        content = response.choices[0].message.content
         if not content:
             return []
 

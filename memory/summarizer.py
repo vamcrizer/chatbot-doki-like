@@ -62,19 +62,16 @@ CUỘC TRÒ CHUYỆN CẦN TÓM TẮT:
 Tóm tắt dưới 200 từ. Viết tiếng Việt."""
 
     try:
-        from cerebras_client import client, MODEL
-        response = client.chat.completions.create(
-            model=MODEL,
+        from cerebras_client import chat_complete
+        content = chat_complete(
             messages=[
                 {"role": "system", "content": SUMMARY_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.2,
-            max_completion_tokens=1024,
+            max_tokens=1024,
         )
-
-        content = response.choices[0].message.content
-        return content.strip() if content else ""
+        return content if content else ""
 
     except Exception as e:
         print(f"[Summarizer] Error: {e}")

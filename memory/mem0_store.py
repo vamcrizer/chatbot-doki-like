@@ -1,58 +1,63 @@
 """
-Mem0 Store — Qdrant in-memory + Ollama embeddings for DokiChat.
+Mem0 Store — Qdrant in-memory + LM Studio embeddings for DokiChat.
 Adapted from agent-smart-memo's architecture.
 
 Uses:
 - Qdrant in-memory (via qdrant-client, no Docker needed)
-- Ollama HTTP API for embeddings (snowflake-arctic-embed)
+- LM Studio OpenAI-compatible API for embeddings
 - JSON file backup for persistence across restarts
 """
 import json
 import os
 import uuid
-import httpx
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from dotenv import load_dotenv
 
+from openai import OpenAI
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
     Filter, FieldCondition, MatchValue,
 )
 
-# ── Ollama Embedding Client ──────────────────────────────────
+load_dotenv()
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "snowflake-arctic-embed2")
-EMBED_DIM = 1024  # snowflake-arctic-embed default dimension
+# ── LM Studio Embedding Client ───────────────────────────────
+
+LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
+LM_STUDIO_API_KEY = os.environ.get("LM_STUDIO_API_KEY", "lm-studio")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-snowflake-arctic-embed-l-v2.0")
+EMBED_DIM = 1024  # default dimension, probed at init
+
+_embed_client = OpenAI(base_url=LM_STUDIO_BASE_URL, api_key=LM_STUDIO_API_KEY)
 
 
-def ollama_embed(text: str) -> list[float]:
-    """Get embedding vector from Ollama API."""
-    resp = httpx.post(
-        f"{OLLAMA_BASE_URL}/api/embeddings",
-        json={"model": EMBED_MODEL, "prompt": text},
-        timeout=30.0,
+def lmstudio_embed(text: str) -> list[float]:
+    """Get embedding vector from LM Studio's /v1/embeddings endpoint."""
+    response = _embed_client.embeddings.create(
+        model=EMBED_MODEL,
+        input=text,
     )
-    resp.raise_for_status()
-    return resp.json()["embedding"]
+    return response.data[0].embedding
 
 
-def ollama_embed_batch(texts: list[str]) -> list[list[float]]:
-    """Batch embedding — calls sequentially (Ollama doesn't support batch)."""
-    return [ollama_embed(t) for t in texts]
+def lmstudio_embed_batch(texts: list[str]) -> list[list[float]]:
+    """Batch embedding via LM Studio."""
+    response = _embed_client.embeddings.create(
+        model=EMBED_MODEL,
+        input=texts,
+    )
+    return [item.embedding for item in response.data]
 
 
-def check_ollama_health() -> bool:
-    """Check if Ollama is running and model is available."""
+def check_embedding_health() -> bool:
+    """Check if LM Studio is running and embedding model is loaded."""
     try:
-        resp = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5.0)
-        if resp.status_code != 200:
-            return False
-        models = [m["name"] for m in resp.json().get("models", [])]
-        # Check if our model exists (with or without :latest tag)
-        return any(EMBED_MODEL in m for m in models)
+        models = _embed_client.models.list()
+        model_ids = [m.id for m in models.data]
+        return any(EMBED_MODEL in mid for mid in model_ids)
     except Exception:
         return False
 
@@ -64,21 +69,21 @@ MEMORY_DIR = Path("memory/sessions")
 
 
 class MemoryStore:
-    """Qdrant in-memory + Ollama embeddings. JSON backup for persistence."""
+    """Qdrant in-memory + LM Studio embeddings. JSON backup for persistence."""
 
     def __init__(self, user_id: str, character_id: str):
         self.user_id = user_id
         self.character_id = character_id
         self.scope = f"{user_id}_{character_id}"
-        self._ollama_ok = check_ollama_health()
+        self._embed_ok = check_embedding_health()
 
         # Init Qdrant in-memory
         self.qdrant = QdrantClient(":memory:")
         dim = EMBED_DIM
-        if self._ollama_ok:
+        if self._embed_ok:
             # Probe actual dimension from model
             try:
-                test_vec = ollama_embed("test")
+                test_vec = lmstudio_embed("test")
                 dim = len(test_vec)
             except Exception:
                 pass
@@ -96,10 +101,10 @@ class MemoryStore:
         self._load_json()
         self._reindex_all()
 
-        if self._ollama_ok:
-            print(f"[Mem0] ✅ Ollama + Qdrant ready (dim={self.dim}, model={EMBED_MODEL})")
+        if self._embed_ok:
+            print(f"[Mem0] ✅ LM Studio + Qdrant ready (dim={self.dim}, model={EMBED_MODEL})")
         else:
-            print(f"[Mem0] ⚠️ Ollama unavailable — using keyword search fallback")
+            print(f"[Mem0] ⚠️ LM Studio embedding unavailable — using keyword search fallback")
 
     # ── JSON persistence ──────────────────────────────────────
 
@@ -117,12 +122,12 @@ class MemoryStore:
 
     def _reindex_all(self):
         """Re-index all memories from JSON into Qdrant on startup."""
-        if not self._ollama_ok or not self._data["memories"]:
+        if not self._embed_ok or not self._data["memories"]:
             return
 
         for m in self._data["memories"]:
             try:
-                vector = ollama_embed(m["text"])
+                vector = lmstudio_embed(m["text"])
                 self.qdrant.upsert(
                     collection_name=COLLECTION_NAME,
                     points=[PointStruct(
@@ -158,10 +163,10 @@ class MemoryStore:
             }
             self._data["memories"].append(entry)
 
-            # Index in Qdrant if Ollama available
-            if self._ollama_ok:
+            # Index in Qdrant if embedding available
+            if self._embed_ok:
                 try:
-                    vector = ollama_embed(fact["text"])
+                    vector = lmstudio_embed(fact["text"])
                     self.qdrant.upsert(
                         collection_name=COLLECTION_NAME,
                         points=[PointStruct(
@@ -181,10 +186,10 @@ class MemoryStore:
         self._save_json()
 
     def search(self, query: str, top_k: int = 10) -> list[str]:
-        """Semantic search if Ollama available, else keyword fallback."""
-        if self._ollama_ok:
+        """Semantic search if embedding available, else keyword fallback."""
+        if self._embed_ok:
             try:
-                vector = ollama_embed(query)
+                vector = lmstudio_embed(query)
                 results = self.qdrant.query_points(
                     collection_name=COLLECTION_NAME,
                     query=vector,
@@ -242,9 +247,9 @@ class MemoryStore:
 
         new_words = set(new_text.lower().split())
 
-        if self._ollama_ok:
+        if self._embed_ok:
             try:
-                new_vec = ollama_embed(new_text)
+                new_vec = lmstudio_embed(new_text)
                 results = self.qdrant.query_points(
                     collection_name=COLLECTION_NAME,
                     query=new_vec,
@@ -278,7 +283,7 @@ class MemoryStore:
             except Exception as e:
                 print(f"[Mem0] Dedup error: {e}, fallback to word overlap")
 
-        # Pure word overlap fallback (no Ollama)
+        # Pure word overlap fallback (no embedding)
         for m in self._data["memories"]:
             existing_words = set(m["text"].lower().split())
             if new_words and existing_words:
@@ -300,5 +305,5 @@ class MemoryStore:
 
 
 def create_memory_store(user_id: str, character_id: str) -> MemoryStore:
-    """Factory — always returns MemoryStore (auto-detects Ollama)."""
+    """Factory — always returns MemoryStore (auto-detects LM Studio embedding)."""
     return MemoryStore(user_id, character_id)

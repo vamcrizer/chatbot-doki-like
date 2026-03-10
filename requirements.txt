@@ -1,4 +1,4 @@
-cerebras-cloud-sdk
+openai
 python-dotenv
 streamlit
 httpx

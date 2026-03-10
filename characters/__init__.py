@@ -3,6 +3,7 @@ from characters.kael import KAEL
 from characters.seraphine import SERAPHINE
 from characters.ren import REN
 from characters.linh_dan import LINH_DAN
+from characters.sol import SOL
 from character_generator import load_custom_characters
 
 # Hardcoded characters
@@ -11,6 +12,7 @@ CHARACTERS = {
     "seraphine": SERAPHINE,
     "ren": REN,
     "linh_dan": LINH_DAN,
+    "sol": SOL,
 }
 
 
