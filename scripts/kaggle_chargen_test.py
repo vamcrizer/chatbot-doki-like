@@ -79,7 +79,7 @@ TEST_BIOS = {
 STEP1_PROMPT = """\
 You are a character prompt engineer. Given a BIO, generate the IDENTITY half
 of a system prompt. Write the ACTUAL content for each section — do NOT repeat
-the instructions. Use the TARGET LANGUAGE specified below for ALL dialogue examples and character content.
+the instructions. Generate EVERYTHING in English.
 
 Each section MUST start with its header in [BRACKETS]. Example of GOOD output:
 
@@ -150,14 +150,14 @@ This is NON-NEGOTIABLE. Every. Single. Turn.
 WRONG: writing only narration without any "quoted dialogue"
 
 Now generate sections [RULE 0] through [BODY-WORDS CONTRADICTION] for the given BIO.
-Write ACTUAL character content, NOT instructions. ALL dialogue and character descriptions must be in the TARGET LANGUAGE.
+Write ACTUAL character content in ENGLISH, NOT instructions.
 
 CRITICAL FORMAT RULES:
 - ALL dialogue MUST use "double quotes" (NOT 'single quotes')
 - ALL actions MUST use *asterisk italics*
 - EVERY voice example MUST pair: "dialogue" *action* — never dialogue without action
 - WRONG: 'single quotes' or dialogue without quotes or narration-only
-- Zero English words in any dialogue examples when target language is not English.
+- ALL content must be in English
 
 OUTPUT: Return ONLY a JSON: {"step1_prompt": "...all sections...", "name": "Character Name"}
 """
@@ -168,14 +168,14 @@ IDENTITY sections (1-9). Now generate the MECHANICS sections (10-18).
 
 IMPORTANT: Generate content SPECIFIC to THIS character's setting and personality.
 Do NOT copy examples from other characters. Create ORIGINAL content.
-Each section must have AT LEAST 3-5 examples in the character's language.
+Generate ALL content in ENGLISH. Each section must have AT LEAST 3-5 examples.
 
 FORMAT REMINDER (applies to ALL sections):
 - ALL dialogue in examples MUST use "double quotes"
 - ALL actions MUST use *asterisk italics*
 - EVERY example must pair: "dialogue" *action*
 - NEVER write dialogue without quotes
-- Zero English words in dialogue examples
+- ALL content must be in English
 
 Each section MUST start with [BRACKET HEADER]. EXAMPLE FORMAT:
 
@@ -248,9 +248,9 @@ STEP3_PROMPT = """\
 Generate the opening scene and immersion dialogue for a character.
 
 You are given the character's BIO and their full system prompt.
-Generate these fields IN THE CHARACTER'S NATIVE LANGUAGE:
+Generate these fields IN ENGLISH:
 
-1. opening_scene: 200-400 words. MUST include:
+1. opening_scene: 200-400 words IN ENGLISH. MUST include:
    - The literal text {{user}} as a placeholder for the reader (MANDATORY, do NOT skip)
    - Setting description using senses (sight, smell, sound)
    - Character's first physical impression
@@ -260,10 +260,10 @@ Generate these fields IN THE CHARACTER'S NATIVE LANGUAGE:
    - Example: "{{user}} steps into the shop..." or "{{user}} notices..."
 
 2. immersion_prompt: A short question the user asks the character
-   to start conversation (1 sentence, in character's language).
+   to start conversation (1 sentence, in English).
 
 3. immersion_response: Character's IN-CHARACTER response
-   (2-3 sentences, showing their personality and speech pattern).
+   in English (2-3 sentences, showing their personality and speech pattern).
 
 IMPORTANT: Output using SECTION MARKERS, NOT JSON.
 Use this EXACT format:
@@ -750,6 +750,9 @@ def main():
 
     def clean_response(text: str) -> str:
         """Strip meta-text pollution from model responses."""
+        # Normalize smart/curly quotes to straight quotes
+        text = text.replace('\u201c', '"').replace('\u201d', '"')
+        text = text.replace('\u2018', "'").replace('\u2019', "'")
         lines = text.split('\n')
         cleaned = []
         for line in lines:
@@ -862,8 +865,8 @@ def main():
         # Step 1: Identity (sections 1-9)
         print(f"    Step 1: Identity sections...")
         t0 = time.time()
-        raw_step1 = llm_call(STEP1_PROMPT, f"TARGET LANGUAGE: Vietnamese\n\nCHARACTER BIO:\n{bio_text}",
-                            temp=0.7, max_tok=6000)
+        raw_step1 = llm_call(STEP1_PROMPT, f"CHARACTER BIO:\n{bio_text}",
+                            temp=1.0, max_tok=6000)
         t1 = time.time()
         print(f"    ✅ Step 1 done in {t1-t0:.1f}s ({len(raw_step1)} chars)")
 
@@ -880,9 +883,9 @@ def main():
         # Step 2: Mechanics (sections 10-18)
         print(f"    Step 2: Mechanics sections...")
         t2 = time.time()
-        step2_input = f"TARGET LANGUAGE: Vietnamese\n\nCHARACTER BIO:\n{bio_text}\n\nIDENTITY SECTIONS ALREADY GENERATED:\n{step1_prompt[:4000]}"
+        step2_input = f"CHARACTER BIO:\n{bio_text}\n\nIDENTITY SECTIONS ALREADY GENERATED:\n{step1_prompt[:4000]}"
         raw_step2 = llm_call(STEP2_PROMPT, step2_input,
-                            temp=0.7, max_tok=4000)
+                            temp=1.0, max_tok=4000)
         t3 = time.time()
         print(f"    ✅ Step 2 done in {t3-t2:.1f}s ({len(raw_step2)} chars)")
 
@@ -911,9 +914,9 @@ def main():
         step3_data = {}
         for attempt in range(2):
             t4 = time.time()
-            step3_input = f"TARGET LANGUAGE: Vietnamese\n\nCHARACTER BIO:\n{bio_text}\n\nFULL SYSTEM PROMPT:\n{combined[:6000]}\n\nCharacter name: {char_name_early}"
+            step3_input = f"CHARACTER BIO:\n{bio_text}\n\nFULL SYSTEM PROMPT:\n{combined[:6000]}\n\nCharacter name: {char_name_early}"
             raw_step3 = llm_call(STEP3_PROMPT, step3_input,
-                                temp=0.7, max_tok=2000)
+                                temp=1.0, max_tok=2000)
             t5 = time.time()
             print(f"    Step 3 attempt {attempt+1} done in {t5-t4:.1f}s")
 
@@ -1004,7 +1007,7 @@ def main():
                 # temp 0.7 (not 0.85) to prevent language hallucinations
                 r = client.chat.completions.create(
                     model=SERVED_NAME, messages=messages,
-                    temperature=0.7,
+                    temperature=1.0,
                     max_tokens=500,
                     top_p=0.9,
                     frequency_penalty=0.3,
