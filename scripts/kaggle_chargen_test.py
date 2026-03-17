@@ -292,7 +292,7 @@ FORMAT_ENFORCEMENT = """
 □ Do NOT repeat the same sentence or phrase from previous turns.
 □ Each response must feel DIFFERENT from the last — vary hooks, props, actions.
 □ If the system prompt says "example: X", do NOT use X. Create something new.
-"
+"""
 
 # ── Test conversation turns — designed to hit quality dimensions ─
 def get_test_turns(char_name: str) -> list[dict]:
