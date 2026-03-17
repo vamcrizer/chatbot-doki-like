@@ -4,7 +4,7 @@ from characters.seraphine import SERAPHINE
 from characters.ren import REN
 from characters.linh_dan import LINH_DAN
 from characters.sol import SOL
-from character_generator import load_custom_characters
+from characters.generator import load_custom_characters
 
 # Hardcoded characters
 CHARACTERS = {

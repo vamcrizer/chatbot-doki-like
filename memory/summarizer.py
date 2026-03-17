@@ -62,7 +62,7 @@ CUỘC TRÒ CHUYỆN CẦN TÓM TẮT:
 Tóm tắt dưới 200 từ. Viết tiếng Việt."""
 
     try:
-        from cerebras_client import chat_complete
+        from core.llm_client import chat_complete
         content = chat_complete(
             messages=[
                 {"role": "system", "content": SUMMARY_PROMPT},

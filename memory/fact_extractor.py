@@ -78,7 +78,7 @@ User: {user_msg}
 Extract facts. JSON only."""
 
     try:
-        from cerebras_client import chat_complete
+        from core.llm_client import chat_complete
         content = chat_complete(
             messages=[
                 {"role": "system", "content": system_prompt},
