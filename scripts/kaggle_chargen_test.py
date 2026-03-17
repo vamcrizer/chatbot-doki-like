@@ -1,13 +1,13 @@
 """
 ============================================================
-DOKICHAT — CHARACTER GENERATION QUALITY TEST v5.2 (Kaggle H100)
+DOKICHAT — CHARACTER GENERATION QUALITY TEST v5.3 (Kaggle H100)
 ============================================================
 
-Changes from v5.1:
-  - STEP1: Stronger VOICE format rule — every example MUST be "dialogue" *action*
-  - STEP2: Added FORMAT REMINDER at top for sections 10-18
-  - FORMAT_ENFORCEMENT: Added interleave rule (alternate action/dialogue)
-  - Fixed An Thu English leak + MK literary-only style
+Changes from v5.2:
+  - Conv temperature 0.85 → 0.7 (fix language hallucinations)
+  - Added [LANGUAGE — ABSOLUTE] section in FORMAT_ENFORCEMENT
+  - Step 3 retry logic when opening/immersion returns empty
+  - Stronger anti-English rules with explicit banned patterns
 
 Run on: Kaggle H100 GPU
 """
@@ -291,6 +291,15 @@ Return ONLY a JSON object:
 # ── FORMAT_ENFORCEMENT — injected during test conversation ───
 FORMAT_ENFORCEMENT = """
 
+[LANGUAGE — ABSOLUTE — ZERO TOLERANCE]
+□ Output 100% in the SAME language the user is using. If user writes Vietnamese, ALL output must be Vietnamese.
+□ ZERO foreign words. Not a single English, Chinese, Japanese, Korean, Russian word.
+□ BANNED: "but", "and", "because", "she", "he", "my", "love", "feel", "like"
+□ BANNED: Any Chinese (中文), Japanese (日本語), Korean (한국어), Russian (русский) characters
+□ If you catch yourself writing a foreign word, STOP and replace it with Vietnamese.
+□ "but" → "nhưng", "and" → "và", "because" → "vì", "love" → "yêu"
+□ SCAN your output for ANY non-Vietnamese characters before submitting.
+
 [FORMAT — MANDATORY]
 □ ALL dialogue MUST use "double quotes". NEVER use 'single quotes' for speech.
 □ ALL actions MUST use *asterisk italics*.
@@ -300,7 +309,7 @@ FORMAT_ENFORCEMENT = """
 □ INTERLEAVE: Never write 3+ lines of only narration. Alternate "dialogue" and *action*.
 
 [SELF-CHECK — BEFORE EVERY OUTPUT]
-□ Language = match user. Zero foreign words in *action* AND "dialogue". NO ENGLISH.
+□ LANGUAGE: Scan for any non-Vietnamese word. If found, DELETE and rewrite in Vietnamese.
 □ NO projection (feelings/intentions user hasn't stated).
 □ DIALOGUE ≥ 30%, NARRATION ≤ 70%. Aim for 40-50% dialogue.
 □ At least 3 lines of "quoted dialogue" per response.
@@ -819,21 +828,36 @@ def main():
         print(f"    📊 System prompt: {len(combined)} chars (~{est_tokens} tokens)")
 
         # Step 3: Opening scene + immersion (dedicated step, NOT assembly)
+        # Retry once if result is empty
         print(f"    Step 3: Opening scene + immersion...")
-        t4 = time.time()
-        step3_input = f"CHARACTER BIO:\n{bio_text}\n\nFULL SYSTEM PROMPT:\n{combined[:6000]}\n\nCharacter name: {char_name_early}"
-        raw_step3 = llm_call(STEP3_PROMPT, step3_input,
-                            temp=0.7, max_tok=2000)
-        t5 = time.time()
-        gen_time = t5 - t0
-        print(f"    ✅ Step 3 done in {t5-t4:.1f}s")
-        print(f"    Total generation: {gen_time:.1f}s")
+        step3_data = {}
+        for attempt in range(2):
+            t4 = time.time()
+            step3_input = f"CHARACTER BIO:\n{bio_text}\n\nFULL SYSTEM PROMPT:\n{combined[:6000]}\n\nCharacter name: {char_name_early}"
+            raw_step3 = llm_call(STEP3_PROMPT, step3_input,
+                                temp=0.7, max_tok=2000)
+            t5 = time.time()
+            print(f"    Step 3 attempt {attempt+1} done in {t5-t4:.1f}s")
 
-        try:
-            step3_data = parse_json(raw_step3)
-        except Exception as e:
-            print(f"    ❌ Step 3 JSON parse failed: {e}")
-            step3_data = {}
+            try:
+                step3_data = parse_json(raw_step3)
+            except Exception as e:
+                print(f"    ❌ Step 3 JSON parse failed: {e}")
+                step3_data = {}
+
+            # Check if we got all required fields
+            has_opening = bool(step3_data.get("opening_scene", "").strip())
+            has_immersion = bool(step3_data.get("immersion_prompt", "").strip())
+            if has_opening and has_immersion:
+                print(f"    ✅ Step 3 complete")
+                break
+            elif attempt == 0:
+                print(f"    ⚠️ Step 3 incomplete (opening={has_opening}, immersion={has_immersion}), retrying...")
+            else:
+                print(f"    ❌ Step 3 still incomplete after retry")
+
+        gen_time = time.time() - t0
+        print(f"    Total generation: {gen_time:.1f}s")
 
         # Construct final char_data
         char_data = {
@@ -893,12 +917,11 @@ def main():
             messages.append({"role": "user", "content": user_msg})
             t0 = time.time()
             try:
-                # Match production quality test params
-                # NOTE: min_tokens & repetition_penalty are vLLM-only,
-                # must go in extra_body (NOT standard OpenAI SDK params)
+                # Production chat params
+                # temp 0.7 (not 0.85) to prevent language hallucinations
                 r = client.chat.completions.create(
                     model=SERVED_NAME, messages=messages,
-                    temperature=0.85,
+                    temperature=0.7,
                     max_tokens=500,
                     top_p=0.9,
                     frequency_penalty=0.3,
