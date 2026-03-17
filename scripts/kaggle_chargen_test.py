@@ -878,17 +878,17 @@ def main():
             messages.append({"role": "user", "content": user_msg})
             t0 = time.time()
             try:
-                # Match production quality test params exactly
+                # Match production quality test params
+                # NOTE: min_tokens & repetition_penalty are vLLM-only,
+                # must go in extra_body (NOT standard OpenAI SDK params)
                 r = client.chat.completions.create(
                     model=SERVED_NAME, messages=messages,
                     temperature=0.85,
                     max_tokens=500,
-                    min_tokens=175,             # force min length!
                     top_p=0.9,
                     frequency_penalty=0.3,
-                    repetition_penalty=1.2,     # vLLM native
                     extra_body={
-                        "min_tokens": 175,      # vLLM-specific
+                        "min_tokens": 175,
                         "repetition_penalty": 1.2,
                     },
                 )
