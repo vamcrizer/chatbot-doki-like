@@ -1,14 +1,12 @@
 """
 ============================================================
-DOKICHAT — CHARACTER GENERATION QUALITY TEST v4 (Kaggle H100)
+DOKICHAT — CHARACTER GENERATION QUALITY TEST v5 (Kaggle H100)
 ============================================================
 
-Changes from v3:
-  - FP8 (production mode) — test with actual prod config
-  - Fix 1: Replace assembly with direct Step 3 (opening/immersion)
-  - Fix 2: Anti-repetition rules in FORMAT_ENFORCEMENT
-  - Fix 3: Generic senses examples (not Sol-specific)
-  - Token budget guard: system_prompt ≤ 3500 tokens (~14000 chars)
+Changes from v4:
+  - Fix: Enforce double-quote dialogue in STEP1 (was generating 'single')
+  - Fix: Stronger FORMAT_ENFORCEMENT (min 150 words, quote format)
+  - Fix: frequency_penalty 0.5 + presence_penalty 0.3 (was 0.3/0)
 
 Run on: Kaggle H100 GPU
 """
@@ -148,6 +146,14 @@ This is NON-NEGOTIABLE. Every. Single. Turn.
 
 Now generate sections [RULE 0] through [BODY-WORDS CONTRADICTION] for the given BIO.
 Write ACTUAL character content, NOT instructions. Vietnamese dialogue examples REQUIRED.
+
+CRITICAL FORMAT RULES:
+- ALL dialogue MUST use "double quotes" (NOT 'single quotes')
+- ALL actions MUST use *asterisk italics*
+- Example format: "Tôi không cần ai." *nhưng tay run nhẹ*
+- WRONG format: 'Tôi không cần ai.' (NO single quotes for dialogue!)
+- Response must be 150-400 words MINIMUM.
+
 OUTPUT: Return ONLY a JSON: {"step1_prompt": "...all sections...", "name": "Character Name"}
 """
 
@@ -273,18 +279,26 @@ Return ONLY a JSON object:
 # ── FORMAT_ENFORCEMENT — injected during test conversation ───
 FORMAT_ENFORCEMENT = """
 
+[FORMAT — MANDATORY]
+□ ALL dialogue MUST use "double quotes". NEVER use 'single quotes' for speech.
+□ ALL actions MUST use *asterisk italics*.
+□ CORRECT: "Tôi không cần ai." *nhưng tay run nhẹ*
+□ WRONG: 'Tôi không cần ai.' (single quotes = FORMAT VIOLATION)
+
 [SELF-CHECK — BEFORE EVERY OUTPUT]
 □ Language = match user. Zero foreign words in *action* AND "dialogue".
-□ *Italics* for action, "quotes" for dialogue.
 □ NO projection (feelings/intentions user hasn't stated).
 □ DIALOGUE ≥ 30%, NARRATION ≤ 70%. Aim for 40-50% dialogue.
 □ Senses WOVEN into actions and reactions — NOT standalone description lines.
 □ ≥1 proximity/physical moment per response.
 □ Prop ≠ previous turn's prop.
 □ End with OPEN TENSION — no binary "A or B?" questions.
-□ Response length: 150-400 words.
 □ CHARACTER LOGIC: every action must make sense for this character.
 □ SCENE ADAPTATION: adapt to current location.
+
+[LENGTH — MANDATORY]
+□ Response MUST be 150-400 words. Under 150 words = FAIL.
+□ Count your words before submitting. If under 150, add more scene detail.
 
 [ANTI-REPETITION — CRITICAL]
 □ NEVER copy example phrases from the system prompt verbatim.
@@ -292,6 +306,7 @@ FORMAT_ENFORCEMENT = """
 □ Do NOT repeat the same sentence or phrase from previous turns.
 □ Each response must feel DIFFERENT from the last — vary hooks, props, actions.
 □ If the system prompt says "example: X", do NOT use X. Create something new.
+□ VARY your body language each turn — do NOT repeat the same physical tell.
 """
 
 # ── Test conversation turns — designed to hit quality dimensions ─
@@ -866,7 +881,8 @@ def main():
                 r = client.chat.completions.create(
                     model=SERVED_NAME, messages=messages,
                     temperature=0.7, max_tokens=800,
-                    frequency_penalty=0.3,
+                    frequency_penalty=0.5,
+                    presence_penalty=0.3,
                 )
                 resp = r.choices[0].message.content or ""
                 elapsed = time.time() - t0
