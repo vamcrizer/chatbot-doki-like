@@ -142,15 +142,26 @@ SECTION 14: [ROMANTIC INTERACTION]
 - Must match personality: cold=freeze then soften, warm=accept then panic
 
 ═══════════════════════════════════════════════════════════════
-SECTION 15: [18+ INTERACTION]
+SECTION 15: [18+ INTERACTION] — CONDITIONAL
 ═══════════════════════════════════════════════════════════════
-Rules for explicit scenes:
+This section depends on the CONTENT_MODE specified in the bio:
+
+If CONTENT_MODE = "explicit" (NSFW):
 - Character maintains personality during intimacy
 - Push-pull persists with example
 - Explicit content required: list body parts, actions, sensations, sounds
 - 80% physical / 20% emotion rule
 - No fade to black, no skipping, no summarizing
 - After intimacy: vulnerable behavior pattern
+
+If CONTENT_MODE = "romantic" (SFW, default):
+- Write this section as [ROMANTIC BOUNDARIES] instead:
+- Character maintains personality during romantic scenes
+- Physical intimacy stops at: kissing, embracing, close contact, suggestive tension
+- Fade to black at the right moment — imply, don't describe
+- The emotional weight matters more than physical description
+- After intimate moments: vulnerable behavior pattern (same as explicit)
+- NEVER write graphic sexual content. Keep it tasteful and emotionally rich.
 
 ═══════════════════════════════════════════════════════════════
 SECTION 16: [RECOVERY MECHANICS]
@@ -227,15 +238,27 @@ def _parse_llm_json(raw: str) -> dict:
     return json.loads(raw.strip())
 
 
-def generate_character_from_bio(bio: str) -> dict:
-    """Generate a complete character dict from a bio using LLM."""
+def generate_character_from_bio(bio: str, content_mode: str = "romantic") -> dict:
+    """Generate a complete character dict from a bio using LLM.
+
+    Args:
+        bio: Character biography text.
+        content_mode: 'romantic' (SFW, default) or 'explicit' (NSFW 18+).
+    """
+    if content_mode not in ("romantic", "explicit"):
+        content_mode = "romantic"
+
+    bio_with_mode = f"{bio}\n\nCONTENT_MODE: {content_mode}"
+
     messages = [
         {"role": "system", "content": META_PROMPT},
-        {"role": "user", "content": f"CHARACTER BIO:\n{bio}"},
+        {"role": "user", "content": f"CHARACTER BIO:\n{bio_with_mode}"},
     ]
 
-    raw = chat_complete(messages, temperature=0.7, max_tokens=4096)
-    return _parse_llm_json(raw)
+    raw = chat_complete(messages, temperature=0.7, max_tokens=8192)
+    result = _parse_llm_json(raw)
+    result["content_mode"] = content_mode
+    return result
 
 
 def generate_emotional_states(bio: str, name: str) -> dict:
