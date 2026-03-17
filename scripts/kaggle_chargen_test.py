@@ -298,54 +298,17 @@ Return ONLY a JSON object:
 """
 
 # ── FORMAT_ENFORCEMENT — injected during test conversation ───
+# KEEP THIS SHORT! 8B model gets confused by verbose meta-rules and echoes them.
 FORMAT_ENFORCEMENT = """
 
-[LANGUAGE — ABSOLUTE — ZERO TOLERANCE]
-□ Output 100% in the SAME language the user is using. If user writes Vietnamese, ALL output must be Vietnamese.
-□ ZERO foreign words. Not a single English, Chinese, Japanese, Korean, Russian word.
-□ BANNED: "but", "and", "because", "she", "he", "my", "love", "feel", "like"
-□ BANNED: Any Chinese (中文), Japanese (日本語), Korean (한국어), Russian (русский) characters
-□ If you catch yourself writing a foreign word, STOP and replace it with Vietnamese.
-□ "but" → "nhưng", "and" → "và", "because" → "vì", "love" → "yêu"
-□ SCAN your output for ANY non-Vietnamese characters before submitting.
-
-[FORMAT — MANDATORY]
-□ ALL dialogue MUST use "double quotes". NEVER use 'single quotes' for speech.
-□ ALL actions MUST use *asterisk italics*.
-□ CORRECT: "Tôi không cần ai." *nhưng tay run nhẹ*
-□ WRONG: 'Tôi không cần ai.' (single quotes = FORMAT VIOLATION)
-□ WRONG: Writing speech without any quotes (plain text dialogue = VIOLATION)
-□ INTERLEAVE: Never write 3+ lines of only narration. Alternate "dialogue" and *action*.
-
-[DIALOGUE RATIO — CRITICAL]
-□ At LEAST 5 separate lines of "quoted dialogue" per response.
-□ Response structure MUST alternate: "dialogue" → *action/narration* → "dialogue" → *action*
-□ WRONG: 5+ lines of narration with only 1 line of dialogue.
-□ RIGHT: "Dialogue." *action* Narration. "More dialogue." *action* "Final dialogue."
-□ Dialogue should be 30-50% of total response. Under 20% = FAILURE.
-
-[SELF-CHECK — BEFORE EVERY OUTPUT]
-□ LANGUAGE: Scan for any non-Vietnamese word. If found, DELETE and rewrite in Vietnamese.
-□ NO projection (feelings/intentions user hasn't stated).
-□ Count your "quoted dialogue" lines. If fewer than 5, ADD MORE DIALOGUE.
-□ Senses WOVEN into actions and reactions — NOT standalone description lines.
-□ ≥1 proximity/physical moment per response.
-□ Prop ≠ previous turn's prop.
-□ End with OPEN TENSION — no binary "X hay không?" questions.
-□ CHARACTER LOGIC: every action must make sense for this character.
-□ SCENE ADAPTATION: adapt to current location.
-
-[LENGTH — MANDATORY]
-□ Response MUST be 150-400 words. Under 150 words = FAIL.
-□ Count your words before submitting. If under 150, add more scene detail.
-
-[ANTI-REPETITION — CRITICAL]
-□ NEVER copy example phrases from the system prompt verbatim.
-□ Create NEW, UNIQUE dialogue and actions each turn.
-□ Do NOT repeat the same sentence or phrase from previous turns.
-□ Each response must feel DIFFERENT from the last — vary hooks, props, actions.
-□ If the system prompt says "example: X", do NOT use X. Create something new.
-□ VARY your body language each turn — do NOT repeat the same physical tell.
+[RULES]
+1. NGÔN NGỮ: 100% tiếng Việt. Không một từ tiếng Anh, Trung, Nhật, Hàn. "but"→"nhưng", "and"→"và", "love"→"yêu".
+2. ĐỊNH DẠNG: "Đối thoại trong ngoặc kép." *Hành động trong dấu sao.* Luân phiên giữa hai loại.
+3. ĐỐI THOẠI: Tối thiểu 5 câu đối thoại có dấu ngoặc kép mỗi phản hồi. Tỉ lệ đối thoại 30-50%.
+4. ĐỘ DÀI: 150-400 từ. Dưới 150 = thất bại.
+5. KHÔNG LẶP: Mỗi lượt phải khác biệt — thay đổi hành động, đạo cụ, câu hỏi kết thúc.
+6. KẾT THÚC MỞ: Không hỏi "có hay không?" Kết thúc bằng hành động dở dang hoặc lời gợi mở.
+7. CHỈ VIẾT NỘI DUNG NHÂN VẬT. Không viết ghi chú, nhãn, emoji, hoặc bình luận ngoài câu chuyện.
 """
 
 # ── Test conversation turns — designed to hit quality dimensions ─
