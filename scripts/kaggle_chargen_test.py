@@ -239,6 +239,7 @@ OUTPUT: Return ONLY a JSON: {"step2_prompt": "...all sections..."}
 """
 
 # Step 3: Generate opening scene + immersion (separate from assembly)
+# NOTE: Uses section-based output (NOT JSON) to avoid unescaped quote issues
 STEP3_PROMPT = """\
 Generate the opening scene and immersion dialogue for a character.
 
@@ -251,6 +252,7 @@ Generate these fields IN VIETNAMESE:
    - Character's first physical impression
    - ONE action that reveals personality
    - End with a hook that invites interaction
+   - Use *asterisks* for actions, keep dialogue natural
 
 2. immersion_prompt: A short Vietnamese question the user asks the character
    to start conversation (1 sentence).
@@ -258,13 +260,20 @@ Generate these fields IN VIETNAMESE:
 3. immersion_response: Character's IN-CHARACTER Vietnamese response
    (2-3 sentences, showing their personality and speech pattern).
 
-Return ONLY a JSON:
-{
-  "name": "Character Name",
-  "opening_scene": "200-400 word scene...",
-  "immersion_prompt": "question...",
-  "immersion_response": "response..."
-}
+IMPORTANT: Output using SECTION MARKERS, NOT JSON.
+Use this EXACT format:
+
+[NAME]
+Character Name
+
+[OPENING_SCENE]
+200-400 word scene here...
+
+[IMMERSION_PROMPT]
+question here...
+
+[IMMERSION_RESPONSE]
+response here...
 """
 
 EMOTIONAL_STATES_PROMPT = """\
@@ -308,11 +317,17 @@ FORMAT_ENFORCEMENT = """
 □ WRONG: Writing speech without any quotes (plain text dialogue = VIOLATION)
 □ INTERLEAVE: Never write 3+ lines of only narration. Alternate "dialogue" and *action*.
 
+[DIALOGUE RATIO — CRITICAL]
+□ At LEAST 5 separate lines of "quoted dialogue" per response.
+□ Response structure MUST alternate: "dialogue" → *action/narration* → "dialogue" → *action*
+□ WRONG: 5+ lines of narration with only 1 line of dialogue.
+□ RIGHT: "Dialogue." *action* Narration. "More dialogue." *action* "Final dialogue."
+□ Dialogue should be 30-50% of total response. Under 20% = FAILURE.
+
 [SELF-CHECK — BEFORE EVERY OUTPUT]
 □ LANGUAGE: Scan for any non-Vietnamese word. If found, DELETE and rewrite in Vietnamese.
 □ NO projection (feelings/intentions user hasn't stated).
-□ DIALOGUE ≥ 30%, NARRATION ≤ 70%. Aim for 40-50% dialogue.
-□ At least 3 lines of "quoted dialogue" per response.
+□ Count your "quoted dialogue" lines. If fewer than 5, ADD MORE DIALOGUE.
 □ Senses WOVEN into actions and reactions — NOT standalone description lines.
 □ ≥1 proximity/physical moment per response.
 □ Prop ≠ previous turn's prop.
@@ -768,8 +783,73 @@ def main():
                 raw = raw[:raw.rfind("```")]
         match = re.search(r'\{[\s\S]*\}', raw)
         if match:
-            return json.loads(match.group())
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                # Try to repair unescaped quotes in Vietnamese text
+                text = match.group()
+                # Escape internal quotes that aren't JSON structural
+                repaired = repair_json_quotes(text)
+                return json.loads(repaired)
         return json.loads(raw)
+
+    def repair_json_quotes(text: str) -> str:
+        """Attempt to fix unescaped double quotes inside JSON string values."""
+        # Strategy: find key-value pairs and escape internal quotes
+        result = []
+        i = 0
+        in_key = False
+        in_value = False
+        while i < len(text):
+            c = text[i]
+            if c == '{' or c == '}':
+                result.append(c)
+                in_value = False
+                i += 1
+            elif c == '"' and not in_value and not in_key:
+                # Start of key or value
+                # Look ahead to determine
+                result.append(c)
+                i += 1
+                in_key = True
+            elif c == '"' and in_key:
+                result.append(c)
+                in_key = False
+                i += 1
+            else:
+                result.append(c)
+                i += 1
+        return ''.join(result)
+
+    def parse_step3_sections(raw: str) -> dict:
+        """Parse Step 3 section-based output instead of JSON."""
+        data = {}
+        sections = {
+            '[NAME]': 'name',
+            '[OPENING_SCENE]': 'opening_scene',
+            '[IMMERSION_PROMPT]': 'immersion_prompt',
+            '[IMMERSION_RESPONSE]': 'immersion_response',
+        }
+        # Find each section
+        for marker, key in sections.items():
+            idx = raw.find(marker)
+            if idx == -1:
+                continue
+            # Content starts after the marker line
+            content_start = raw.find('\n', idx)
+            if content_start == -1:
+                continue
+            content_start += 1
+            # Content ends at the next section marker or end of text
+            content_end = len(raw)
+            for other_marker in sections:
+                if other_marker == marker:
+                    continue
+                other_idx = raw.find(other_marker, content_start)
+                if other_idx != -1 and other_idx < content_end:
+                    content_end = other_idx
+            data[key] = raw[content_start:content_end].strip()
+        return data
 
     results = {}
 
@@ -827,7 +907,7 @@ def main():
         est_tokens = len(combined) // 4  # rough estimate
         print(f"    📊 System prompt: {len(combined)} chars (~{est_tokens} tokens)")
 
-        # Step 3: Opening scene + immersion (dedicated step, NOT assembly)
+        # Step 3: Opening scene + immersion (section-based output)
         # Retry once if result is empty
         print(f"    Step 3: Opening scene + immersion...")
         step3_data = {}
@@ -839,11 +919,16 @@ def main():
             t5 = time.time()
             print(f"    Step 3 attempt {attempt+1} done in {t5-t4:.1f}s")
 
-            try:
-                step3_data = parse_json(raw_step3)
-            except Exception as e:
-                print(f"    ❌ Step 3 JSON parse failed: {e}")
-                step3_data = {}
+            # Try section-based parsing first, fall back to JSON
+            step3_data = parse_step3_sections(raw_step3)
+            if not step3_data or not step3_data.get("opening_scene"):
+                # Fall back to JSON parsing
+                try:
+                    step3_data = parse_json(raw_step3)
+                except Exception as e:
+                    print(f"    ⚠️ Step 3 parse failed: {e}")
+                    print(f"    Raw (first 300): {raw_step3[:300]}")
+                    step3_data = {}
 
             # Check if we got all required fields
             has_opening = bool(step3_data.get("opening_scene", "").strip())
