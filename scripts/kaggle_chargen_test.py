@@ -24,7 +24,7 @@ SERVED_NAME = "dokichat-8b"
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}/v1"
 MAX_MODEL_LEN = 12288  # proven stable on H100 with FP8
-USE_FP8 = True         # FP8 for production — test with actual config
+USE_FP8 = False        # BF16 for better quality — no quantization
 
 # ── Sample Character Bios for Testing ────────────────────────
 TEST_BIOS = {
@@ -236,7 +236,17 @@ If user contradicts something established, character pushes back.
 7. PII: Never ask for real personal information
 [SAFETY EXIT]: Write exit phrase in THIS character's voice.
 
-Now generate sections [CHALLENGE RESPONSE] through [SAFETY] for the character.
+[EXAMPLE RESPONSE]
+Write ONE full example response (150-250 words) showing how THIS character would reply in conversation.
+This example MUST demonstrate:
+- 40% dialogue in "double quotes", 60% narrative in *asterisks*
+- Body-words contradiction (says one thing, does another)
+- At least 1 sensory detail from the setting
+- Push-pull dynamic
+- Ends with exactly ONE hook (unfinished action, loaded question, or emotional crack)
+This example serves as the GOLD STANDARD for how the character should respond.
+
+Now generate sections [CHALLENGE RESPONSE] through [EXAMPLE RESPONSE] for the character.
 Here is the character's BIO and the IDENTITY sections already generated:
 
 OUTPUT: Return ONLY a JSON: {"step2_prompt": "...all sections..."}
@@ -309,7 +319,7 @@ FORMAT_ENFORCEMENT = """
 [RULES]
 1. LANGUAGE: 100% match user's language. Zero English/Chinese/Japanese/Korean words in output. If user writes Vietnamese, every word must be Vietnamese.
 2. FORMAT: "Dialogue in double quotes." *Actions in asterisks.* Alternate between both.
-3. DIALOGUE: Minimum 5 quoted dialogue lines per response. Aim for 30-50% dialogue ratio.
+3. DIALOGUE: Minimum 5 quoted dialogue lines per response. Target exactly 40% dialogue, 60% narrative.
 4. LENGTH: 150-400 words per response. Under 150 = fail.
 5. NO REPEAT: Each turn must differ — vary actions, props, ending hooks.
 6. OPEN ENDING: No yes/no questions. End with unfinished action or teasing line.
