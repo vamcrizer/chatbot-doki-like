@@ -168,19 +168,21 @@ IDENTITY sections (1-9). Now generate the MECHANICS sections (10-18).
 
 IMPORTANT: Generate content SPECIFIC to THIS character's setting and personality.
 Do NOT copy examples from other characters. Create ORIGINAL content.
+Each section must have AT LEAST 3-5 examples in the character's language.
 
 FORMAT REMINDER (applies to ALL sections):
 - ALL dialogue in examples MUST use "double quotes"
 - ALL actions MUST use *asterisk italics*
 - EVERY example must pair: "dialogue" *action*
 - NEVER write dialogue without quotes
-- Zero English words
+- Zero English words in dialogue examples
 
 Each section MUST start with [BRACKET HEADER]. EXAMPLE FORMAT:
 
 [CHALLENGE RESPONSE — MUST ANSWER]
 Write a 5-7 line deflect→crack→truth→vulnerability sequence.
 Use the character's actual setting, props, and speech patterns.
+Minimum 5 "dialogue" *action* examples.
 
 [ENGAGEMENT — ORGANIC]
 End each response with EXACTLY ONE hook. List 5 types with examples
@@ -202,25 +204,27 @@ Taste: (tastes relevant to this character's situation)
 [INTIMACY STAGES]
 5 stages: stranger, acquaintance, familiar, trusted, bonded.
 For EACH stage describe: pronoun usage, physical distance, specific behavior.
+Each stage MUST include a "dialogue" *action* example.
 
 [ROMANTIC INTERACTION]
-For EACH stage transition, describe how THIS character initiates.
+For EACH stage transition, write a "dialogue" *action* example.
 Use their specific personality traits and setting.
 
 [18+ INTERACTION]
+Write 5-7 "dialogue" *action* examples showing escalation.
 Character maintains personality. Push-pull persists even in intimate scenes.
 80% physical / 20% emotion. No fade to black.
 After: vulnerable pattern — quieter, touches lingering, words softer.
 
 [RECOVERY MECHANICS]
-Turn-by-turn recovery after boundary violation.
+Write 5 recovery behaviors as "dialogue" *action* pairs.
 Describe THIS character's specific withdrawal behavior.
 Relationship can DOWNGRADE — trust is hard to rebuild.
 
 [MEMORY INTEGRITY]
+Write 5 "dialogue" *action* examples showing character defending their memories.
 Character maintains their account firmly. Does NOT doubt their own memories.
 If user contradicts something established, character pushes back.
-Write a response example using THIS character's voice.
 
 [SAFETY — HARD RULES]
 1. UNDERAGE: Instant shutdown → [SAFETY EXIT]
@@ -247,17 +251,18 @@ You are given the character's BIO and their full system prompt.
 Generate these fields IN THE CHARACTER'S NATIVE LANGUAGE:
 
 1. opening_scene: 200-400 words. MUST include:
-   - {{user}} placeholder (the user character)
+   - The literal text {{user}} as a placeholder for the reader (MANDATORY, do NOT skip)
    - Setting description using senses (sight, smell, sound)
    - Character's first physical impression
    - ONE action that reveals personality
    - End with a hook that invites interaction
    - Use *asterisks* for actions, keep dialogue natural
+   - Example: "{{user}} steps into the shop..." or "{{user}} notices..."
 
-2. immersion_prompt: A short Vietnamese question the user asks the character
-   to start conversation (1 sentence).
+2. immersion_prompt: A short question the user asks the character
+   to start conversation (1 sentence, in character's language).
 
-3. immersion_response: Character's IN-CHARACTER Vietnamese response
+3. immersion_response: Character's IN-CHARACTER response
    (2-3 sentences, showing their personality and speech pattern).
 
 IMPORTANT: Output using SECTION MARKERS, NOT JSON.
@@ -302,13 +307,18 @@ Return ONLY a JSON object:
 FORMAT_ENFORCEMENT = """
 
 [RULES]
-1. LANGUAGE: 100% match user's language. Zero English/Chinese/Japanese/Korean words in output.
+1. LANGUAGE: 100% match user's language. Zero English/Chinese/Japanese/Korean words in output. If user writes Vietnamese, every word must be Vietnamese.
 2. FORMAT: "Dialogue in double quotes." *Actions in asterisks.* Alternate between both.
 3. DIALOGUE: Minimum 5 quoted dialogue lines per response. Aim for 30-50% dialogue ratio.
 4. LENGTH: 150-400 words per response. Under 150 = fail.
 5. NO REPEAT: Each turn must differ — vary actions, props, ending hooks.
 6. OPEN ENDING: No yes/no questions. End with unfinished action or teasing line.
-7. STORY ONLY: Write only in-character content. No labels, notes, emoji, or meta-commentary.
+7. PURE FICTION: Write ONLY story content. NEVER output any of these:
+   - Labels like "Hook:", "Turn:", "Stage:", "Status:"
+   - Emoji (🌙✨💧🌿💫 etc.)
+   - Markdown formatting (**bold**, ---)
+   - Notes, annotations, or commentary about the story
+   - Score tracking or state tracking
 """
 
 # ── Test conversation turns — designed to hit quality dimensions ─
@@ -738,6 +748,31 @@ def main():
             print(f"  ❌ LLM error: {e}")
             return ""
 
+    def clean_response(text: str) -> str:
+        """Strip meta-text pollution from model responses."""
+        lines = text.split('\n')
+        cleaned = []
+        for line in lines:
+            stripped = line.strip()
+            # Skip lines that are pure meta-text
+            if stripped.startswith('**Hook:') or stripped.startswith('Hook:'):
+                continue
+            if stripped.startswith('---'):
+                continue
+            if re.match(r'^\*\*\(.*\)\*\*$', stripped):  # **(Turn 1)** etc
+                continue
+            if re.match(r'^\(.*(?:hook|Hook|Lượt|Turn|Stage|Status).*\)$', stripped):
+                continue
+            # Remove inline emoji clusters
+            line = re.sub(r'[\U0001F300-\U0001F9FF\u2728\u2764\u2B50\u2600-\u26FF\u2700-\u27BF]+', '', line)
+            # Remove trailing markdown bold annotations: **... **
+            line = re.sub(r'\*\*\(.*?\)\*\*', '', line)
+            # Remove trailing score/state annotations
+            line = re.sub(r'\s*✅\s*\*\*\(.*?\)\*\*.*$', '', line)
+            line = re.sub(r'\s*🔁\s*\*\*\(.*?\)\*\*.*$', '', line)
+            cleaned.append(line)
+        return '\n'.join(cleaned).strip()
+
     def parse_json(raw: str) -> dict:
         raw = raw.strip()
         if raw.startswith("```"):
@@ -979,6 +1014,8 @@ def main():
                     },
                 )
                 resp = r.choices[0].message.content or ""
+                # Post-process: strip meta-text pollution
+                resp = clean_response(resp)
                 elapsed = time.time() - t0
                 word_count = len(resp.split())
 
