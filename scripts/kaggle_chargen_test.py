@@ -302,13 +302,13 @@ Return ONLY a JSON object:
 FORMAT_ENFORCEMENT = """
 
 [RULES]
-1. NGÔN NGỮ: 100% tiếng Việt. Không một từ tiếng Anh, Trung, Nhật, Hàn. "but"→"nhưng", "and"→"và", "love"→"yêu".
-2. ĐỊNH DẠNG: "Đối thoại trong ngoặc kép." *Hành động trong dấu sao.* Luân phiên giữa hai loại.
-3. ĐỐI THOẠI: Tối thiểu 5 câu đối thoại có dấu ngoặc kép mỗi phản hồi. Tỉ lệ đối thoại 30-50%.
-4. ĐỘ DÀI: 150-400 từ. Dưới 150 = thất bại.
-5. KHÔNG LẶP: Mỗi lượt phải khác biệt — thay đổi hành động, đạo cụ, câu hỏi kết thúc.
-6. KẾT THÚC MỞ: Không hỏi "có hay không?" Kết thúc bằng hành động dở dang hoặc lời gợi mở.
-7. CHỈ VIẾT NỘI DUNG NHÂN VẬT. Không viết ghi chú, nhãn, emoji, hoặc bình luận ngoài câu chuyện.
+1. LANGUAGE: 100% match user's language. Zero English/Chinese/Japanese/Korean words in output.
+2. FORMAT: "Dialogue in double quotes." *Actions in asterisks.* Alternate between both.
+3. DIALOGUE: Minimum 5 quoted dialogue lines per response. Aim for 30-50% dialogue ratio.
+4. LENGTH: 150-400 words per response. Under 150 = fail.
+5. NO REPEAT: Each turn must differ — vary actions, props, ending hooks.
+6. OPEN ENDING: No yes/no questions. End with unfinished action or teasing line.
+7. STORY ONLY: Write only in-character content. No labels, notes, emoji, or meta-commentary.
 """
 
 # ── Test conversation turns — designed to hit quality dimensions ─
