@@ -24,7 +24,7 @@ SERVED_NAME = "dokichat-8b"
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}/v1"
 MAX_MODEL_LEN = 12288  # proven stable on H100 with FP8
-USE_FP8 = False        # BF16 for better quality — no quantization
+USE_FP8 = True         # FP8 for A/B comparison test
 
 # ── Sample Character Bios for Testing ────────────────────────
 TEST_BIOS = {
