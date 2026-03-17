@@ -684,9 +684,10 @@ def main():
         "--max-num-seqs", "256",
         "--max-num-batched-tokens", "16384",
         "--chat-template", template_path,
+        "--kv-cache-dtype", "fp8",  # FP8 KV cache always — saves VRAM, negligible quality impact
     ]
     if USE_FP8:
-        vllm_cmd.extend(["--quantization", "fp8", "--kv-cache-dtype", "fp8"])
+        vllm_cmd.extend(["--quantization", "fp8"])
     print(f"Command: {' '.join(vllm_cmd)}")
 
     env = os.environ.copy()
