@@ -79,7 +79,7 @@ TEST_BIOS = {
 STEP1_PROMPT = """\
 You are a character prompt engineer. Given a BIO, generate the IDENTITY half
 of a system prompt. Write the ACTUAL content for each section — do NOT repeat
-the instructions. Use the character's native language for ALL dialogue examples.
+the instructions. Use the TARGET LANGUAGE specified below for ALL dialogue examples and character content.
 
 Each section MUST start with its header in [BRACKETS]. Example of GOOD output:
 
@@ -150,14 +150,14 @@ This is NON-NEGOTIABLE. Every. Single. Turn.
 WRONG: writing only narration without any "quoted dialogue"
 
 Now generate sections [RULE 0] through [BODY-WORDS CONTRADICTION] for the given BIO.
-Write ACTUAL character content, NOT instructions. Dialogue examples in character's language REQUIRED.
+Write ACTUAL character content, NOT instructions. ALL dialogue and character descriptions must be in the TARGET LANGUAGE.
 
 CRITICAL FORMAT RULES:
 - ALL dialogue MUST use "double quotes" (NOT 'single quotes')
 - ALL actions MUST use *asterisk italics*
 - EVERY voice example MUST pair: "dialogue" *action* — never dialogue without action
 - WRONG: 'single quotes' or dialogue without quotes or narration-only
-- Zero English words in any non-English character's dialogue examples.
+- Zero English words in any dialogue examples when target language is not English.
 
 OUTPUT: Return ONLY a JSON: {"step1_prompt": "...all sections...", "name": "Character Name"}
 """
@@ -862,7 +862,7 @@ def main():
         # Step 1: Identity (sections 1-9)
         print(f"    Step 1: Identity sections...")
         t0 = time.time()
-        raw_step1 = llm_call(STEP1_PROMPT, f"CHARACTER BIO:\n{bio_text}",
+        raw_step1 = llm_call(STEP1_PROMPT, f"TARGET LANGUAGE: Vietnamese\n\nCHARACTER BIO:\n{bio_text}",
                             temp=0.7, max_tok=6000)
         t1 = time.time()
         print(f"    ✅ Step 1 done in {t1-t0:.1f}s ({len(raw_step1)} chars)")
@@ -880,7 +880,7 @@ def main():
         # Step 2: Mechanics (sections 10-18)
         print(f"    Step 2: Mechanics sections...")
         t2 = time.time()
-        step2_input = f"CHARACTER BIO:\n{bio_text}\n\nIDENTITY SECTIONS ALREADY GENERATED:\n{step1_prompt[:4000]}"
+        step2_input = f"TARGET LANGUAGE: Vietnamese\n\nCHARACTER BIO:\n{bio_text}\n\nIDENTITY SECTIONS ALREADY GENERATED:\n{step1_prompt[:4000]}"
         raw_step2 = llm_call(STEP2_PROMPT, step2_input,
                             temp=0.7, max_tok=4000)
         t3 = time.time()
@@ -911,7 +911,7 @@ def main():
         step3_data = {}
         for attempt in range(2):
             t4 = time.time()
-            step3_input = f"CHARACTER BIO:\n{bio_text}\n\nFULL SYSTEM PROMPT:\n{combined[:6000]}\n\nCharacter name: {char_name_early}"
+            step3_input = f"TARGET LANGUAGE: Vietnamese\n\nCHARACTER BIO:\n{bio_text}\n\nFULL SYSTEM PROMPT:\n{combined[:6000]}\n\nCharacter name: {char_name_early}"
             raw_step3 = llm_call(STEP3_PROMPT, step3_input,
                                 temp=0.7, max_tok=2000)
             t5 = time.time()
