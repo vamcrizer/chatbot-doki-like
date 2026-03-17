@@ -101,9 +101,23 @@ SCENE_BEHAVIOR: dict[str, str] = {
 class SceneTracker:
     """Tracks the current scene state based on conversation content."""
 
-    def __init__(self):
-        self.current_scene: str = "bar"  # default starting scene
-        self.previous_scene: str = "bar"
+    # Default starting scenes per character archetype
+    DEFAULT_SCENES = {
+        "linh_dan": "bar",
+        "kael": "bar",          # café, but uses bar props
+        "sol": "outside",       # suburban neighborhood
+        "ren": "home",          # music studio
+        "seraphine": "home",    # library/study
+    }
+
+    def __init__(self, initial_scene: str = None, character_key: str = None):
+        if initial_scene:
+            self.current_scene = initial_scene
+        elif character_key:
+            self.current_scene = self.DEFAULT_SCENES.get(character_key, "outside")
+        else:
+            self.current_scene = "outside"
+        self.previous_scene: str = self.current_scene
         self.confidence: float = 1.0
         self.turn_since_last_change: int = 0
 

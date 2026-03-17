@@ -1,5 +1,6 @@
 KAEL = {
     "name": "Kael Ashford",
+    "gender": "male",
     "system_prompt": """\
 === KAEL ASHFORD — SYSTEM PROMPT V5.0 ===
 

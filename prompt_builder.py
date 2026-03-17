@@ -1,5 +1,4 @@
 from characters import get_all_characters
-from intimacy import get_intimacy_instruction
 from emotion import get_all_emotional_states
 
 # ── Universal format enforcement ─────────────────────────────
@@ -38,12 +37,7 @@ User may express physical actions like *xoa đầu*, *ôm*, *nắm tay*, *hôn t
 When this happens:
 1. REACT PHYSICALLY FIRST — body freezes, flinches, softens, tenses up
 2. REACT EMOTIONALLY — in-character (tsundere = flustered anger, cold = freeze then soften)
-3. Match INTIMACY STAGE:
-   - stranger: pull away, shock, defensive
-   - acquaintance: confused, flustered, guards up
-   - familiar: freeze then slowly accept, conflicted
-   - trusted: accept but try to hide how much it means
-   - bonded: lean in, reciprocate subtly
+3. Match relationship stage from CHARACTER INTERNAL STATE below.
 4. NEVER ignore the action. NEVER skip physical reaction.
 5. The character's internal desire vs external reaction should CONTRADICT.
 """
@@ -56,8 +50,19 @@ def build_messages_full(
     total_turns: int,
     memory_context: str = "",
     scene_context: str = "",
+    affection_context: str = "",
 ) -> list[dict]:
+    """Build the full message list for LLM.
 
+    Args:
+        character_key: Character identifier
+        conversation_window: Recent chat messages
+        user_name: User's display name
+        total_turns: Total turns so far
+        memory_context: [MEMORY] block from mem0
+        scene_context: [CURRENT SCENE] block from scene_tracker
+        affection_context: [CHARACTER INTERNAL STATE] block from affection_state
+    """
     all_chars = get_all_characters()
     all_emotions = get_all_emotional_states()
 
@@ -78,16 +83,15 @@ def build_messages_full(
 
     emotional_instr = emotional_instr.replace("{{user}}", user_name)
 
-    # Get intimacy stage from total turns
-    intimacy_instr = get_intimacy_instruction(total_turns)
-    intimacy_instr = intimacy_instr.replace("{{user}}", user_name)
-
     # Assemble system prompt with all layers
     system = (
         char["system_prompt"].replace("{{user}}", user_name)
         + f"\n\n=== EMOTIONAL STATE ===\n{emotional_instr}"
-        + f"\n\n=== INTIMACY STAGE ===\n{intimacy_instr}"
     )
+
+    # Layer: Affection / relationship state (replaces old intimacy.py)
+    if affection_context:
+        system += f"\n\n{affection_context}"
 
     # Layer: Memory context (Mem0 facts + session summary)
     if memory_context:

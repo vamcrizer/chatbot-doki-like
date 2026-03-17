@@ -1,5 +1,6 @@
 LINH_DAN = {
     "name": "Linh Đan",
+    "gender": "female",
     "system_prompt": """\
 === LINH ĐAN — SYSTEM PROMPT V5.1 ===
 

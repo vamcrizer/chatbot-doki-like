@@ -55,26 +55,56 @@ def build_export_txt(
 
 
 # ── Memory helpers ────────────────────────────────────────────
-def build_memory_context(mem_store, user_name: str) -> str:
-    """Build the [MEMORY] context block from stored facts + summary."""
-    facts = mem_store.get_all()
+def build_memory_context(mem_store, user_name: str, current_msg: str = "") -> str:
+    """Build the [MEMORY] context block using semantic recall + recent facts.
+
+    Follows mem0_architecture.md: "On each user message, the current input
+    is used to query the top-10 most relevant memories."
+    """
+    all_facts = mem_store.get_all()
     summary = mem_store.get_summary()
 
-    if not facts and not summary:
+    if not all_facts and not summary:
         return ""
 
     parts = []
 
-    # User facts
-    user_facts = [f for f in facts if f.get("type") in ("user_fact", "emotional_state")]
-    if user_facts:
+    # ── Semantic recall: relevant facts based on current message ──
+    relevant_texts = set()
+    if current_msg:
+        relevant_texts = set(mem_store.search(current_msg, top_k=5))
+
+    # ── Recent facts (always include last 5 for continuity) ──
+    recent_texts = {f["text"] for f in all_facts[-5:]}
+
+    # ── Merge: relevant + recent, deduplicated, ordered ──
+    user_facts = [f for f in all_facts if f.get("type") in ("user_fact", "emotional_state")]
+    seen = set()
+    ordered_facts = []
+
+    # Relevant first (semantically matched)
+    for f in user_facts:
+        if f["text"] in relevant_texts and f["text"] not in seen:
+            ordered_facts.append(f["text"])
+            seen.add(f["text"])
+
+    # Then recent (for continuity)
+    for f in user_facts:
+        if f["text"] in recent_texts and f["text"] not in seen:
+            ordered_facts.append(f["text"])
+            seen.add(f["text"])
+
+    # Cap at 10 total to control token budget (~200 tokens)
+    ordered_facts = ordered_facts[:10]
+
+    if ordered_facts:
         parts.append(f"[MEMORY — what you know about {user_name}]")
-        for f in user_facts[-10:]:  # top 10 most recent
-            parts.append(f"- {f['text']}")
+        for text in ordered_facts:
+            parts.append(f"- {text}")
         parts.append("Use naturally. NEVER say \"I remember that...\" — just ACT on it.")
 
     # Character development notes
-    char_notes = [f for f in facts if f.get("type") == "character_note"]
+    char_notes = [f for f in all_facts if f.get("type") == "character_note"]
     if char_notes:
         parts.append("\n[CHARACTER DEVELOPMENT — what has been revealed]")
         for f in char_notes[-5:]:
@@ -147,7 +177,7 @@ if "creating" not in st.session_state:
 
 # Memory system init
 if "scene_tracker" not in st.session_state:
-    st.session_state.scene_tracker = SceneTracker()
+    st.session_state.scene_tracker = SceneTracker(character_key=st.session_state.character_key)
 if "mem_store" not in st.session_state:
     st.session_state.mem_store = None  # initialized when character selected
 if "affection" not in st.session_state:
@@ -193,7 +223,7 @@ with st.sidebar:
             st.session_state.conv.clear()
             st.session_state.messages_display = []
             st.session_state.mem_store = None
-            st.session_state.scene_tracker = SceneTracker()
+            st.session_state.scene_tracker = SceneTracker(character_key=st.session_state.character_key)
             st.rerun()
 
     st.divider()
@@ -220,7 +250,7 @@ with st.sidebar:
     if st.button("🗑️ Xóa lịch sử chat", use_container_width=True):
         st.session_state.conv.clear()
         st.session_state.messages_display = []
-        st.session_state.scene_tracker = SceneTracker()
+        st.session_state.scene_tracker = SceneTracker(character_key=st.session_state.character_key)
         st.session_state.affection = AffectionState()
         # Don't clear mem_store — memories persist across sessions!
         st.rerun()
@@ -259,7 +289,7 @@ with st.sidebar:
         st.session_state.messages_display = []
         st.session_state.character_key = character_key
         st.session_state.user_name = user_name
-        st.session_state.scene_tracker = SceneTracker()
+        st.session_state.scene_tracker = SceneTracker(character_key=character_key)
         st.session_state.mem_store = None  # re-init for new char
         st.session_state.affection = AffectionState()
 
@@ -362,7 +392,7 @@ Giọng nói: Dùng "ta/ngươi", mỉa mai, chua chát nhưng thỉnh thoảng 
                 st.session_state.messages_display = []
                 st.session_state.show_creator = False
                 st.session_state.mem_store = None
-                st.session_state.scene_tracker = SceneTracker()
+                st.session_state.scene_tracker = SceneTracker(character_key=st.session_state.character_key)
                 st.rerun()
 
             except Exception as e:
@@ -404,10 +434,11 @@ if user_input := st.chat_input(f"Nhắn tin với {char['name']}..."):
     st.session_state.scene_tracker.update(user_input)
     scene_context = st.session_state.scene_tracker.get_context_block()
 
-    # Build memory context
+    # Build memory context — semantic recall from user's current message
     memory_context = build_memory_context(
         st.session_state.mem_store,
         st.session_state.user_name,
+        current_msg=user_input,
     )
 
     # Build affection context
@@ -422,7 +453,8 @@ if user_input := st.chat_input(f"Nhắn tin với {char['name']}..."):
         user_name=st.session_state.user_name,
         total_turns=st.session_state.conv.total_turns,
         memory_context=memory_context,
-        scene_context=scene_context + affection_context,
+        scene_context=scene_context,
+        affection_context=affection_context,
     )
 
     with st.chat_message("assistant"):
@@ -432,8 +464,8 @@ if user_input := st.chat_input(f"Nhắn tin với {char['name']}..."):
         )
         elapsed = time.time() - start
 
-        # Post-process response (POV fix)
-        response = post_process_response(response, char["name"])
+        # Post-process response (POV fix with correct pronouns)
+        response = post_process_response(response, char["name"], gender=char.get("gender"))
 
         # Show scene + memory + affection info
         aff = st.session_state.affection

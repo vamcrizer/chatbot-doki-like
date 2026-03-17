@@ -66,6 +66,6 @@ Nhập tiểu sử dạng text → LLM tự sinh:
 |---|---|
 | Giao diện | **Streamlit** |
 | LLM chính | **Cerebras Inference** (`gpt-oss-120b`) |
-| Embedding | **Ollama** (`snowflake-arctic-embed2`, 1024d) |
+| Embedding | **Qwen3-Embedding-0.6B** (1024d, 100+ languages) |
 | Vector DB | **Qdrant** (in-memory, qdrant-client) |
 | Lưu trữ | **JSON** files (persistence qua restart) |

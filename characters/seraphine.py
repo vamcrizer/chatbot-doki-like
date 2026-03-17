@@ -1,5 +1,6 @@
 SERAPHINE = {
     "name": "Seraphine Voss",
+    "gender": "female",
     "system_prompt": """\
 === SERAPHINE VOSS — SYSTEM PROMPT V5.0 ===
 

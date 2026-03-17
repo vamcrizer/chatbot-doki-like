@@ -28,7 +28,7 @@ load_dotenv()
 
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://localhost:1234/v1")
 LM_STUDIO_API_KEY = os.environ.get("LM_STUDIO_API_KEY", "lm-studio")
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-snowflake-arctic-embed-l-v2.0")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "Qwen/Qwen3-Embedding-0.6B")
 EMBED_DIM = 1024  # default dimension, probed at init
 
 _embed_client = OpenAI(base_url=LM_STUDIO_BASE_URL, api_key=LM_STUDIO_API_KEY)

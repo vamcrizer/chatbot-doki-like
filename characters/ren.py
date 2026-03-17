@@ -1,5 +1,6 @@
 REN = {
     "name": "Ren Hayashi",
+    "gender": "male",
     "system_prompt": """\
 === REN HAYASHI — SYSTEM PROMPT V5.0 ===
 
