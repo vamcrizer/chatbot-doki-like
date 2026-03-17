@@ -878,11 +878,19 @@ def main():
             messages.append({"role": "user", "content": user_msg})
             t0 = time.time()
             try:
+                # Match production quality test params exactly
                 r = client.chat.completions.create(
                     model=SERVED_NAME, messages=messages,
-                    temperature=0.7, max_tokens=800,
-                    frequency_penalty=0.5,
-                    presence_penalty=0.3,
+                    temperature=0.85,
+                    max_tokens=500,
+                    min_tokens=175,             # force min length!
+                    top_p=0.9,
+                    frequency_penalty=0.3,
+                    repetition_penalty=1.2,     # vLLM native
+                    extra_body={
+                        "min_tokens": 175,      # vLLM-specific
+                        "repetition_penalty": 1.2,
+                    },
                 )
                 resp = r.choices[0].message.content or ""
                 elapsed = time.time() - t0
