@@ -15,12 +15,16 @@ Run on: Kaggle H100 GPU
 
 import subprocess, sys, os, time, json, re, textwrap
 
+# ── Kaggle env fixes ─────────────────────────────────────────
+os.environ["TRANSFORMERS_NO_TF"] = "1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 # ── Config ───────────────────────────────────────────────────
 MODEL_ID = "huihui-ai/Huihui-Qwen3-8B-abliterated-v2"
 SERVED_NAME = "dokichat-8b"
 PORT = 8000
 BASE_URL = f"http://localhost:{PORT}/v1"
-MAX_MODEL_LEN = 16384  # increased — 18-section prompts are large
+MAX_MODEL_LEN = 12288  # proven stable on H100
 
 # ── Sample Character Bios for Testing ────────────────────────
 TEST_BIOS = {
@@ -538,16 +542,31 @@ def main():
     print("DOKICHAT — CHARACTER GENERATION QUALITY TEST v2")
     print("=" * 60)
 
-    # ── Step 1: Install deps ──
+    # ── Step 1: Install deps + clean Kaggle conflicts ──
     print("\n[1/5] Installing dependencies...")
+    subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y",
+                    "tensorflow", "keras", "jax", "jaxlib", "scikit-learn",
+                    "matplotlib", "seaborn", "--quiet"],
+                   capture_output=True)
     subprocess.run([sys.executable, "-m", "pip", "install", "-q",
                     "vllm", "openai", "httpx"], check=True)
 
-    import torch
+    import torch, httpx
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "NO GPU"
-    print(f"✅ GPU: {gpu_name}")
+    gpu_cap = torch.cuda.get_device_capability(0)
+    print(f"✅ GPU: {gpu_name} (compute {gpu_cap})")
 
-    # ── Step 2: No-think template ──
+    # ── Step 2: Fix libcuda symlinks (Kaggle) ──
+    subprocess.run("ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/stubs/libcuda.so",
+                   shell=True, capture_output=True)
+    subprocess.run("ln -sf /usr/lib/x86_64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so",
+                   shell=True, capture_output=True)
+
+    # Kill any existing server
+    subprocess.run("pkill -f 'vllm.entrypoints' || true", shell=True, capture_output=True)
+    time.sleep(2)
+
+    # ── Step 3: No-think template (with add_generation_prompt) ──
     nothink_template = """\
 {%- for message in messages %}
 {%- if message.role == "system" %}
@@ -561,40 +580,86 @@ def main():
 {{ message.content }}<|im_end|>
 {%- endif %}
 {%- endfor %}
+{%- if add_generation_prompt %}
 <|im_start|>assistant
-"""
+<think>
+
+</think>
+
+{%- endif %}"""
     template_path = "/tmp/nothink_template.jinja"
     with open(template_path, "w") as f:
         f.write(nothink_template)
 
-    # ── Step 3: Start vLLM ──
+    # ── Step 4: Start vLLM ──
     print("\n[2/5] Starting vLLM server...")
-    vllm_cmd = (
-        f"{sys.executable} -m vllm.entrypoints.openai.api_server "
-        f"--model {MODEL_ID} --served-model-name {SERVED_NAME} "
-        f"--port {PORT} --max-model-len {MAX_MODEL_LEN} "
-        f"--trust-remote-code --dtype bfloat16 "
-        f"--quantization fp8 --kv-cache-dtype fp8 "
-        f"--gpu-memory-utilization 0.93 "
-        f"--enable-prefix-caching "
-        f"--chat-template {template_path}"
-    )
-    vllm_proc = subprocess.Popen(vllm_cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    vllm_cmd = [
+        sys.executable, "-m", "vllm.entrypoints.openai.api_server",
+        "--model", MODEL_ID,
+        "--served-model-name", SERVED_NAME,
+        "--port", str(PORT),
+        "--max-model-len", str(MAX_MODEL_LEN),
+        "--trust-remote-code",
+        "--dtype", "bfloat16",
+        "--quantization", "fp8",
+        "--kv-cache-dtype", "fp8",
+        "--gpu-memory-utilization", "0.93",
+        "--enable-prefix-caching",
+        "--max-num-seqs", "256",
+        "--max-num-batched-tokens", "16384",
+        "--chat-template", template_path,
+    ]
+    print(f"Command: {' '.join(vllm_cmd)}")
 
-    import httpx
-    for i in range(120):
-        time.sleep(2)
+    env = os.environ.copy()
+    env["CUDA_HOME"] = "/usr/local/cuda"
+    env["LD_LIBRARY_PATH"] = f"/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:/usr/lib/x86_64-linux-gnu:{env.get('LD_LIBRARY_PATH', '')}"
+
+    vllm_proc = subprocess.Popen(
+        vllm_cmd,
+        stdout=open("/tmp/vllm_stdout.log", "w"),
+        stderr=open("/tmp/vllm_stderr.log", "w"),
+        env=env,
+    )
+
+    for i in range(180):
         try:
-            r = httpx.get(f"http://localhost:{PORT}/v1/models", timeout=2)
+            r = httpx.get(f"http://localhost:{PORT}/health", timeout=3)
             if r.status_code == 200:
-                print(f"✅ vLLM ready in {(i+1)*2}s")
+                print(f"✅ vLLM ready in {i*5}s")
                 break
         except:
-            if i % 10 == 0:
-                print(f"  Still waiting... ({(i+1)*2}s)")
+            pass
+        if vllm_proc.poll() is not None:
+            print("❌ vLLM crashed! Last 2000 chars of stderr:")
+            try:
+                with open("/tmp/vllm_stderr.log") as f:
+                    print(f.read()[-2000:])
+            except: pass
+            return
+        if i > 0 and i % 12 == 0:
+            print(f"  Still loading... ({i*5}s elapsed)")
+        time.sleep(5)
     else:
-        print("❌ vLLM failed to start")
+        print("❌ vLLM failed to start (timeout 900s)")
+        try:
+            with open("/tmp/vllm_stderr.log") as f:
+                print(f.read()[-2000:])
+        except: pass
         return
+
+    # Warmup / verify
+    print("🔍 Verifying server responds...")
+    try:
+        verify = httpx.post(f"http://localhost:{PORT}/v1/chat/completions", json={
+            "model": SERVED_NAME,
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 10,
+        }, timeout=120)
+        vdata = verify.json()
+        print(f"  ✅ Server OK: {vdata.get('usage', {})}")
+    except Exception as e:
+        print(f"  ⚠️ Verify failed: {e}")
 
     # ── Step 4: Generate + Test ──
     from openai import OpenAI

@@ -15,9 +15,9 @@ openai>=1.30.0
 qdrant-client>=1.9.0
 
 # ── Database (Phase 2) ───────────────────────────────────
-# sqlalchemy>=2.0.0
-# asyncpg>=0.29.0
-# alembic>=1.13.0
+sqlalchemy>=2.0.0
+# asyncpg>=0.29.0       # uncomment when using PostgreSQL
+# alembic>=1.13.0       # uncomment for migrations
 
 # ── Cache (Phase 3) ──────────────────────────────────────
 # redis>=5.0.0
