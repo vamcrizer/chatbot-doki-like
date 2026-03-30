@@ -1,30 +1,38 @@
 """
-Character Service — character management logic.
+Character Service — business logic for character management.
+
+Delegates generation to characters.generator, storage to characters.storage.
+Routes should only call this service, never generator/storage directly.
 """
 import logging
-from typing import Optional
 
 from characters import get_all_characters
 from characters.generator import (
-    generate_character_from_bio,
+    generate_system_prompt,
+    generate_single_greeting,
     generate_emotional_states,
-    save_character,
-    delete_character as delete_char_file,
+    extract_name,
+    extract_gender,
 )
+from characters.storage import save_character, delete_character
 
 logger = logging.getLogger("dokichat.service.character")
 
 BUILTIN_KEYS = {"kael", "seraphine", "ren", "linh_dan", "sol"}
 
-SECTION_MARKERS = [
-    "RULE 0", "CORE PHILOSOPHY", "FORBIDDEN", "CHARACTER", "WOUND",
-    "VOICE", "NARRATIVE STYLE", "PROPS", "CONTRADICTION", "CHALLENGE",
-    "ENGAGEMENT", "SENSES", "INTIMACY", "ROMANTIC", "18+",
-    "RECOVERY", "MEMORY INTEGRITY", "SAFETY",
-]
-
 
 class CharacterService:
+
+    def __init__(self, llm_call_fn):
+        """Initialize with an LLM call function.
+
+        Args:
+            llm_call_fn: Function(messages: list, max_tokens: int) -> str
+        """
+        self._llm = llm_call_fn
+
+    # ── Read ──────────────────────────────────────────────────
+
     def list_all(self) -> list[dict]:
         """List all characters with summary info."""
         all_chars = get_all_characters()
@@ -39,7 +47,7 @@ class CharacterService:
             for key, char in all_chars.items()
         ]
 
-    def get_detail(self, character_id: str) -> Optional[dict]:
+    def get_detail(self, character_id: str) -> dict | None:
         """Get character detail (excludes full system prompt)."""
         all_chars = get_all_characters()
         if character_id not in all_chars:
@@ -52,42 +60,94 @@ class CharacterService:
             "gender": char.get("gender"),
             "setting": char.get("setting"),
             "opening_scene": char.get("opening_scene", ""),
-            "immersion_prompt": char.get("immersion_prompt", ""),
+            "greetings_count": 1 + len(char.get("greetings_alt", [])),
             "is_custom": character_id not in BUILTIN_KEYS,
             "system_prompt_length": len(char.get("system_prompt", "")),
         }
 
-    def create_from_bio(self, bio: str, content_mode: str = "romantic") -> dict:
-        """Generate character from bio using LLM.
+    # ── Generate ──────────────────────────────────────────────
 
-        Returns:
-            {key, name, system_prompt_length, sections_detected}
+    def gen_prompt(self, bio: str, name: str = "", gender: str = "",
+                   content_mode: str = "romantic") -> dict:
+        """Generate system_prompt from bio. Returns prompt + metadata.
+
+        This is the "generate-prompt" endpoint — generates but does NOT save.
         """
-        logger.info(f"Generating character ({len(bio)} chars, mode={content_mode})")
+        if not name:
+            name = extract_name(bio)
+        if not gender:
+            gender = extract_gender(bio)
 
-        char_data = generate_character_from_bio(bio, content_mode=content_mode)
-        char_data["_bio"] = bio
-
-        emo_states = generate_emotional_states(bio, char_data.get("name", ""))
-
-        key = save_character(char_data, emo_states)
-
-        sp = char_data.get("system_prompt", "")
-        sections_found = sum(
-            1 for m in SECTION_MARKERS if m.upper() in sp.upper()
+        result = generate_system_prompt(
+            llm_call_fn=self._llm,
+            bio=bio,
+            name=name,
+            gender=gender,
+            content_mode=content_mode,
         )
 
-        logger.info(f"Created '{key}' ({sections_found}/18 sections)")
+        return {
+            "system_prompt": result["system_prompt"],
+            "name": name,
+            "gender": gender,
+            "char_count": result["validation"]["char_count"],
+            "sections_found": result["validation"]["sections_found"],
+            "sections_total": result["validation"]["sections_total"],
+            "valid": result["validation"]["valid"],
+        }
+
+    def gen_greeting(self, bio: str, name: str = "Character",
+                     gender: str = "female", personality: str = "",
+                     existing_greetings: list[str] | None = None) -> str:
+        """Generate ONE greeting. This is the "Viết cho tôi" feature."""
+        return generate_single_greeting(
+            llm_call_fn=self._llm,
+            bio=bio,
+            name=name,
+            gender=gender,
+            personality=personality,
+            existing_greetings=existing_greetings,
+        )
+
+    # ── Create ────────────────────────────────────────────────
+
+    def create(self, name: str, gender: str, bio: str,
+               system_prompt: str, opening_scene: str = "",
+               greetings_alt: list[str] | None = None,
+               content_mode: str = "romantic",
+               pacing: str = "guarded") -> dict:
+        """Save a complete character. User provides all fields.
+
+        Returns:
+            {key, name, system_prompt_length}
+        """
+        char_data = {
+            "name": name,
+            "gender": gender,
+            "system_prompt": system_prompt,
+            "opening_scene": opening_scene,
+            "greetings_alt": greetings_alt or [],
+            "content_mode": content_mode,
+            "pacing": pacing,
+            "_bio": bio,
+        }
+
+        # Generate emotional states
+        emo_states = generate_emotional_states(self._llm, bio, name)
+
+        key = save_character(char_data, emo_states)
+        logger.info(f"Created character '{key}' ({len(system_prompt)} chars)")
 
         return {
             "key": key,
-            "name": char_data.get("name", key),
-            "system_prompt_length": len(sp),
-            "sections_detected": sections_found,
+            "name": name,
+            "system_prompt_length": len(system_prompt),
         }
+
+    # ── Delete ────────────────────────────────────────────────
 
     def delete(self, key: str) -> bool:
         """Delete a custom character. Returns False if builtin or not found."""
         if key in BUILTIN_KEYS:
             return False
-        return delete_char_file(key)
+        return delete_character(key)

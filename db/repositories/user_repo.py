@@ -1,8 +1,8 @@
 """
-User Repository — user profile CRUD.
+User Repository — CRUD for user accounts.
 
-In-memory implementation stores users in a dict.
-PostgreSQL implementation uses the User model.
+In-memory: dict-based storage (development/testing).
+PostgreSQL: uses User model via SQLAlchemy.
 """
 import logging
 from typing import Optional
@@ -14,7 +14,6 @@ logger = logging.getLogger("dokichat.repo.user")
 
 
 class InMemoryUserRepository(BaseRepository):
-    """In-memory user storage."""
 
     def __init__(self):
         self._store: dict[str, dict] = {}
@@ -26,32 +25,28 @@ class InMemoryUserRepository(BaseRepository):
         return list(self._store.values())
 
     def create(self, data: dict) -> dict:
-        user_id = data["id"]
         record = {
-            "id": user_id,
-            "display_name": data.get("display_name", "bạn"),
+            "id": data["id"],
+            "email": data.get("email", ""),
+            "display_name": data.get("display_name", "User"),
+            "bio": data.get("bio", ""),
+            "language": data.get("language", "vi"),
             "content_mode": data.get("content_mode", "romantic"),
             "created_at": datetime.utcnow().isoformat(),
-            "last_active": datetime.utcnow().isoformat(),
         }
-        self._store[user_id] = record
+        self._store[record["id"]] = record
         return record
 
     def update(self, id: str, data: dict) -> Optional[dict]:
         if id not in self._store:
             return None
         self._store[id].update(data)
-        self._store[id]["last_active"] = datetime.utcnow().isoformat()
         return self._store[id]
 
     def delete(self, id: str) -> bool:
-        if id in self._store:
-            del self._store[id]
-            return True
-        return False
+        return self._store.pop(id, None) is not None
 
     def get_or_create(self, user_id: str, **defaults) -> dict:
-        """Get user or create with defaults."""
         user = self.get(user_id)
         if user is None:
             user = self.create({"id": user_id, **defaults})
@@ -59,71 +54,59 @@ class InMemoryUserRepository(BaseRepository):
 
 
 class PostgresUserRepository(BaseRepository):
-    """PostgreSQL user storage — Phase 2."""
 
     def __init__(self, session_factory):
-        self._session_factory = session_factory
+        self._sf = session_factory
 
     def get(self, id: str) -> Optional[dict]:
         from db.models import User
-        with self._session_factory() as session:
+        with self._sf() as session:
             user = session.query(User).filter_by(id=id).first()
-            if user:
-                return {
-                    "id": user.id,
-                    "display_name": user.display_name,
-                    "content_mode": user.content_mode,
-                    "created_at": user.created_at.isoformat() if user.created_at else None,
-                    "last_active": user.last_active.isoformat() if user.last_active else None,
-                }
-            return None
+            return self._to_dict(user) if user else None
 
     def get_all(self, **filters) -> list[dict]:
         from db.models import User
-        with self._session_factory() as session:
-            users = session.query(User).all()
-            return [
-                {
-                    "id": u.id,
-                    "display_name": u.display_name,
-                    "content_mode": u.content_mode,
-                }
-                for u in users
-            ]
+        with self._sf() as session:
+            return [self._to_dict(u) for u in session.query(User).all()]
 
     def create(self, data: dict) -> dict:
         from db.models import User
-        with self._session_factory() as session:
+        with self._sf() as session:
             user = User(
-                id=data["id"],
-                display_name=data.get("display_name", "bạn"),
+                email=data["email"],
+                password_hash=data.get("password_hash", ""),
+                display_name=data.get("display_name", "User"),
+                bio=data.get("bio", ""),
+                language=data.get("language", "vi"),
                 content_mode=data.get("content_mode", "romantic"),
             )
             session.add(user)
             session.commit()
-            return {"id": user.id, "display_name": user.display_name, "content_mode": user.content_mode}
+            session.refresh(user)
+            return self._to_dict(user)
 
     def update(self, id: str, data: dict) -> Optional[dict]:
         from db.models import User
-        with self._session_factory() as session:
+        with self._sf() as session:
             user = session.query(User).filter_by(id=id).first()
             if not user:
                 return None
-            for k, v in data.items():
-                if hasattr(user, k):
-                    setattr(user, k, v)
+            for key, value in data.items():
+                if hasattr(user, key) and key != "id":
+                    setattr(user, key, value)
             session.commit()
-            return {"id": user.id, "display_name": user.display_name, "content_mode": user.content_mode}
+            session.refresh(user)
+            return self._to_dict(user)
 
     def delete(self, id: str) -> bool:
         from db.models import User
-        with self._session_factory() as session:
+        with self._sf() as session:
             user = session.query(User).filter_by(id=id).first()
-            if user:
-                session.delete(user)
-                session.commit()
-                return True
-            return False
+            if not user:
+                return False
+            session.delete(user)
+            session.commit()
+            return True
 
     def get_or_create(self, user_id: str, **defaults) -> dict:
         user = self.get(user_id)
@@ -131,10 +114,22 @@ class PostgresUserRepository(BaseRepository):
             user = self.create({"id": user_id, **defaults})
         return user
 
+    @staticmethod
+    def _to_dict(user) -> dict:
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "display_name": user.display_name,
+            "bio": user.bio or "",
+            "language": user.language,
+            "content_mode": user.content_mode,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+        }
+
 
 # ── Factory ───────────────────────────────────────────────────
 
-def UserRepository(session_factory=None) -> InMemoryUserRepository | PostgresUserRepository:
+def UserRepository(session_factory=None):
     """Create the appropriate user repository."""
     if session_factory is not None:
         return PostgresUserRepository(session_factory)

@@ -5,5 +5,23 @@ __pycache__/
 .DS_Store
 batch_tests/
 memory/sessions/
-scripts/archive/
+scripts/
 *.log
+*.db
+*.sqlite
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# IDEs
+.vscode/
+.idea/
+
+# Environments
+venv/
+.venv/
+env/
+.env/

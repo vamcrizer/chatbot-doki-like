@@ -4,61 +4,64 @@ Uses hybrid approach: rule-based keyword scan (instant) + optional LLM correctio
 """
 import re
 
-# ── Scene types and their keyword triggers ────────────────────
+# ── Scene types and their keyword triggers (EN, ES, PT, TL, AR) ──
 SCENE_KEYWORDS: dict[str, list[str]] = {
     "bar": [
-        "quầy bar", "quán bar", "pha chế", "shaker", "bartender",
-        "quầy", "cocktail", "rót rượu", "ly", "bar",
+        "bar", "bartender", "shaker", "cocktail", "pour", "drink", "glass",
+        "vaso", "bebida", "trago", "copo", "pub", "club",
+        "kopa", "alak", "مقهى", "مشروب"
     ],
     "outside": [
-        "ra ngoài", "vỉa hè", "đường phố", "bên ngoài", "ngoài trời",
-        "công viên", "hồ", "bờ sông", "bãi biển", "dạo phố",
-        "tản bộ", "lề đường", "ghế đá",
+        "outside", "street", "park", "walk", "sidewalk", "beach", "night",
+        "calle", "parque", "afuera", "caminhada", "rua",
+        "labas", "kalye", "gabi", "شارع", "خارج"
     ],
     "walking": [
-        "đi bộ", "đi dạo", "đi cùng", "kéo đi", "dẫn đi",
-        "bước đi", "rời đi", "cùng nhau đi", "đưa về",
+        "walk", "walking", "stroll", "step", "together", "leave",
+        "caminar", "andar", "paseo", "lakad", "magkasama",
+        "يمشي", "معا"
     ],
     "home": [
-        "về nhà", "căn hộ", "phòng ngủ", "nhà", "phòng khách",
-        "sofa", "giường", "bếp", "cửa nhà",
+        "home", "house", "apartment", "bedroom", "living room", "couch", "bed", "door",
+        "casa", "hogar", "cuarto", "cama",
+        "bahay", "kwarto", "kama", "منزل", "غرفة"
     ],
     "intimate": [
-        "ôm", "hôn", "nắm tay", "áp sát", "thì thầm",
-        "vuốt tóc", "xoa đầu", "dựa vào", "ngả đầu",
-        "chạm môi", "hôn trán", "hôn má",
+        "hug", "kiss", "hold hands", "whisper", "touch", "lean", "cuddle",
+        "beso", "abrazo", "besar", "abraço",
+        "yakap", "halik", "hawak", "lapit", "عناق", "قبلة", "لمس"
     ],
     "private_room": [
-        "phòng riêng", "phòng VIP", "phòng kín", "khóa cửa",
-        "đóng cửa", "riêng tư",
+        "private", "vip", "lock", "closed door", "room",
+        "privacidad", "sala privada", "quarto",
+        "sarado", "pribado", "غرفة خاصة", "مغلق"
     ],
 }
 
 # ── Available props per scene ─────────────────────────────────
 SCENE_PROPS: dict[str, list[str]] = {
     "bar": [
-        "shaker", "ly cocktail", "quầy gỗ", "đá viên",
-        "rượu", "ánh neon", "khăn lau", "coaster",
+        "shaker", "cocktail glass", "wooden counter", "ice cubes",
+        "liquor", "neon light", "towel", "coaster",
     ],
     "outside": [
-        "gió đêm", "ánh đèn phố", "bầu trời đêm", "tiếng xe",
-        "vỉa hè", "bóng cây", "mùi đường phố",
+        "night breeze", "streetlights", "night sky", "traffic sound",
+        "sidewalk", "tree shadows",
     ],
     "walking": [
-        "bước chân", "tiếng giày", "gió", "ánh đèn đường",
-        "bóng hai người", "khoảng cách giữa vai",
+        "footsteps", "wind", "streetlights", "two shadows", "shoulder distance",
     ],
     "home": [
-        "ghế sofa", "đèn bàn", "hộp cọ vẽ", "im lặng",
-        "mùi nhà", "ánh sáng dịu",
+        "sofa", "desk lamp", "paintbrushes", "silence",
+        "familiar scent", "soft light",
     ],
     "intimate": [
-        "hơi thở", "nhịp tim", "khoảng cách", "hơi ấm",
-        "mùi tóc", "da chạm da",
+        "breath", "heartbeat", "proximity", "warmth",
+        "scent of hair", "skin against skin",
     ],
     "private_room": [
-        "đèn mờ", "ghế sofa", "im lặng", "không gian kín",
-        "tiếng bass xa xa",
+        "dim light", "sofa", "silence", "enclosed space",
+        "distant bass sound",
     ],
 }
 
@@ -197,3 +200,22 @@ class SceneTracker:
             )
 
         return block
+
+    def to_dict(self) -> dict:
+        """Serialize for Redis storage."""
+        return {
+            "current_scene": self.current_scene,
+            "previous_scene": self.previous_scene,
+            "confidence": self.confidence,
+            "turn_since_last_change": self.turn_since_last_change,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict, character_key: str = None) -> "SceneTracker":
+        """Restore from Redis data."""
+        tracker = cls(character_key=character_key)
+        tracker.current_scene = d.get("current_scene", tracker.current_scene)
+        tracker.previous_scene = d.get("previous_scene", tracker.previous_scene)
+        tracker.confidence = d.get("confidence", 1.0)
+        tracker.turn_since_last_change = d.get("turn_since_last_change", 0)
+        return tracker

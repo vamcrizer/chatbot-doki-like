@@ -1,134 +1,275 @@
 """
-SQLAlchemy Models — Source of truth for all persistent data.
+SQLAlchemy Models — 1:1 mirror of 001_init.sql (Neon PostgreSQL).
 
 Tables:
-  - users: User profiles + settings
-  - characters: Custom character storage
-  - conversations: Chat history per user-character pair
-  - memories: Extracted facts (replaces JSON files)
-  - affection_states: Relationship progression
+  - users:              Auth + profile + preferences
+  - auth_tokens:        Refresh tokens for JWT auth
+  - characters:         Builtin + UGC characters
+  - conversations:      Chat sessions (one per user × character)
+  - chat_messages:      Individual messages within a conversation
+  - memories:           Extracted facts (user preferences, emotional states)
+  - session_summaries:  Compressed conversation context
+  - affection_states:   Relationship progression per user × character
 """
+import uuid
 from datetime import datetime
+
 from sqlalchemy import (
     Column, String, Text, Integer, Float, Boolean, DateTime,
-    ForeignKey, Index, JSON, UniqueConstraint,
+    ForeignKey, Index, UniqueConstraint, CheckConstraint,
+    func,
 )
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
+# ── Base ──────────────────────────────────────────────────────
+
 class Base(DeclarativeBase):
-    """Base class for all models."""
     pass
 
 
+# ── Users ─────────────────────────────────────────────────────
+
 class User(Base):
+    """User account — auth, profile, and preferences."""
     __tablename__ = "users"
 
-    id = Column(String(64), primary_key=True)
-    display_name = Column(String(100), default="bạn")
-    content_mode = Column(String(20), default="romantic")  # romantic | explicit
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_active = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # Auth
+    email = Column(String(255), nullable=False, unique=True)
+    password_hash = Column(Text, nullable=False)
+
+    # Display
+    display_name = Column(String(50), nullable=False, default="User")
+    avatar_url = Column(Text, nullable=True)
+
+    # User bio — injected into prompt context
+    bio = Column(Text, default="")
+
+    # Preferences
+    language = Column(String(5), nullable=False, default="vi")
+    content_mode = Column(String(10), nullable=False, default="romantic")
+    preferences = Column(JSONB, nullable=False, default=dict)
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     # Relationships
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan")
     memories = relationship("Memory", back_populates="user", cascade="all, delete-orphan")
-    affection_states = relationship("AffectionRecord", back_populates="user", cascade="all, delete-orphan")
-
-
-class Conversation(Base):
-    """Chat history — one row per message."""
-    __tablename__ = "conversations"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(64), ForeignKey("users.id"), nullable=False)
-    character_id = Column(String(64), nullable=False)
-    role = Column(String(10), nullable=False)  # user | assistant
-    content = Column(Text, nullable=False)
-    turn_number = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    # Relationships
-    user = relationship("User", back_populates="conversations")
+    affection_states = relationship("AffectionState", back_populates="user", cascade="all, delete-orphan")
+    auth_tokens = relationship("AuthToken", back_populates="user", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index("ix_conv_user_char", "user_id", "character_id"),
-        Index("ix_conv_created", "created_at"),
+        Index("idx_users_email", "email"),
     )
 
 
+# ── Auth Tokens ───────────────────────────────────────────────
+
+class AuthToken(Base):
+    """Refresh tokens for JWT authentication."""
+    __tablename__ = "auth_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash = Column(Text, nullable=False, unique=True)
+    token_type = Column(String(10), nullable=False, default="refresh")
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    # Relationships
+    user = relationship("User", back_populates="auth_tokens")
+
+    __table_args__ = (
+        Index("idx_auth_tokens_user", "user_id"),
+        Index("idx_auth_tokens_hash", "token_hash"),
+    )
+
+
+# ── Characters ────────────────────────────────────────────────
+
+class Character(Base):
+    """AI character — builtin or user-generated (UGC)."""
+    __tablename__ = "characters"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    creator_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    # Core (generated by META-PROMPT pipeline)
+    name = Column(String(100), nullable=False)
+    gender = Column(String(10), nullable=False, default="female")
+    tagline = Column(String(200), nullable=False, default="")
+    system_prompt = Column(Text, nullable=False)
+    greeting = Column(Text, nullable=False, default="")
+    greetings_alt = Column(JSONB, nullable=False, default=list)
+
+    # Display
+    avatar_url = Column(Text, nullable=True)
+    tags = Column(JSONB, nullable=False, default=list)
+
+    # Behavior
+    pacing = Column(String(20), nullable=False, default="guarded")
+    content_mode = Column(String(10), nullable=False, default="romantic")
+
+    # Visibility
+    is_public = Column(Boolean, nullable=False, default=False)
+    is_builtin = Column(Boolean, nullable=False, default=False)
+
+    # Social proof
+    chat_count = Column(Integer, nullable=False, default=0)
+    like_count = Column(Integer, nullable=False, default=0)
+
+    # Internal
+    bio_original = Column(Text, default="")
+    emotional_states = Column(JSONB, nullable=False, default=dict)
+
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    conversations = relationship("Conversation", back_populates="character", cascade="all, delete-orphan")
+    affection_states = relationship("AffectionState", back_populates="character", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_chars_creator", "creator_id"),
+        Index("idx_chars_public", "is_public", "chat_count"),
+    )
+
+
+# ── Conversations ─────────────────────────────────────────────
+
+class Conversation(Base):
+    """Chat session — one per user × character interaction."""
+    __tablename__ = "conversations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(50), nullable=False)       # String key (Auth Phase 2 → UUID FK)
+    character_id = Column(String(50), nullable=False)   # String key (e.g. "kael")
+
+    title = Column(String(200), default="")
+    turn_count = Column(Integer, nullable=False, default=0)
+    status = Column(String(10), nullable=False, default="active")
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_message_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    # Relationships (disabled until Auth phase)
+    # user = relationship("User", back_populates="conversations")
+    # character = relationship("Character", back_populates="conversations")
+    messages = relationship("ChatMessage", back_populates="conversation", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_conv_user", "user_id", "last_message_at"),
+        Index("idx_conv_char", "character_id"),
+    )
+
+
+# ── Chat Messages ─────────────────────────────────────────────
+
+class ChatMessage(Base):
+    """Individual message within a conversation."""
+    __tablename__ = "chat_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+
+    role = Column(String(10), nullable=False)
+    content = Column(Text, nullable=False)
+    turn_number = Column(Integer, nullable=False)
+
+    metadata_ = Column("metadata", JSONB, default=dict)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    # Relationships
+    conversation = relationship("Conversation", back_populates="messages")
+
+    __table_args__ = (
+        CheckConstraint("role IN ('user', 'assistant')", name="ck_msg_role"),
+        Index("idx_msg_conv", "conversation_id", "created_at"),
+    )
+
+
+# ── Memories ──────────────────────────────────────────────────
+
 class Memory(Base):
-    """Extracted facts — source of truth (Qdrant is read-cache)."""
+    """Extracted fact — user preferences, emotional states, character notes.
+
+    Source of truth for the memory system.
+    # TODO: Qdrant serves as read-cache for semantic search
+    """
     __tablename__ = "memories"
 
-    id = Column(String(36), primary_key=True)  # UUID
-    user_id = Column(String(64), ForeignKey("users.id"), nullable=False)
-    character_id = Column(String(64), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    character_id = Column(UUID(as_uuid=True), nullable=False)
+
     text = Column(Text, nullable=False)
-    type = Column(String(30), default="user_fact")  # user_fact | emotional_state | character_note
+    type = Column(String(30), nullable=False, default="user_fact")
     confidence = Column(Float, default=0.8)
-    superseded_by = Column(String(36), nullable=True)  # for contradiction resolution
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_accessed = Column(DateTime, default=datetime.utcnow)
+    superseded_by = Column(UUID(as_uuid=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    last_accessed = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     user = relationship("User", back_populates="memories")
 
     __table_args__ = (
-        Index("ix_mem_user_char", "user_id", "character_id"),
-        Index("ix_mem_type", "type"),
+        Index("idx_mem_user_char", "user_id", "character_id"),
+        Index("idx_mem_type", "type"),
     )
 
+
+# ── Session Summaries ─────────────────────────────────────────
 
 class SessionSummary(Base):
-    """Conversation summaries — compressed context."""
+    """Compressed conversation context — generated by summarizer."""
     __tablename__ = "session_summaries"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(64), nullable=False)
-    character_id = Column(String(64), nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), nullable=False)
+    character_id = Column(UUID(as_uuid=True), nullable=False)
+
     summary = Column(Text, nullable=False)
-    turn_range = Column(String(20))  # e.g. "1-20"
-    created_at = Column(DateTime, default=datetime.utcnow)
+    turn_range = Column(String(20), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     __table_args__ = (
-        Index("ix_summary_user_char", "user_id", "character_id"),
+        Index("idx_summary_user_char", "user_id", "character_id"),
     )
 
 
-class AffectionRecord(Base):
-    """Relationship state — score + stage + history."""
+# ── Affection States ─────────────────────────────────────────
+
+class AffectionState(Base):
+    """Relationship progression — score, stage, and emotional state per user × character."""
     __tablename__ = "affection_states"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(String(64), ForeignKey("users.id"), nullable=False)
-    character_id = Column(String(64), nullable=False)
-    score = Column(Float, default=0.0)
-    stage = Column(String(20), default="stranger")
-    total_turns = Column(Integer, default=0)
-    history = Column(JSON, default=list)  # list of {delta, reason, turn}
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String(50), nullable=False)       # String key (Auth Phase 2 → UUID FK)
+    character_id = Column(String(50), nullable=False)   # String key (e.g. "kael")
 
-    # Relationships
-    user = relationship("User", back_populates="affection_states")
+    score = Column(Integer, nullable=False, default=0)
+    stage = Column(String(20), nullable=False, default="stranger")
+
+    total_turns = Column(Integer, nullable=False, default=0)
+    scene_state = Column(JSONB, default=dict)
+    emotion_state = Column(String(20), default="neutral")
+
+    last_interaction = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships (disabled until Auth phase)
+    # user = relationship("User", back_populates="affection_states")
+    # character = relationship("Character", back_populates="affection_states")
 
     __table_args__ = (
         UniqueConstraint("user_id", "character_id", name="uq_affection_user_char"),
+        Index("idx_aff_user_char", "user_id", "character_id"),
     )
-
-
-class CustomCharacter(Base):
-    """Custom characters created by users."""
-    __tablename__ = "custom_characters"
-
-    key = Column(String(64), primary_key=True)
-    name = Column(String(100), nullable=False)
-    bio = Column(Text)
-    system_prompt = Column(Text, nullable=False)
-    immersion_prompt = Column(Text)
-    immersion_response = Column(Text)
-    opening_scene = Column(Text)
-    emotional_states = Column(JSON, default=dict)
-    content_mode = Column(String(20), default="romantic")
-    created_by = Column(String(64))  # user_id
-    created_at = Column(DateTime, default=datetime.utcnow)

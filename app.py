@@ -1,5 +1,6 @@
 import streamlit as st
 import time
+import random
 import threading
 from datetime import datetime
 from characters import get_all_characters
@@ -411,7 +412,12 @@ st.divider()
 
 # ── Render lịch sử chat ───────────────────────────────────────
 if not st.session_state.messages_display:
-    opening = char["opening_scene"].replace("{{user}}", st.session_state.user_name)
+    # Multi-greeting: random selection from pool
+    greetings = [char["opening_scene"]]
+    greetings.extend(char.get("greetings_alt", []))
+    greetings = [g for g in greetings if g and g.strip()]
+    selected_greeting = random.choice(greetings) if greetings else char["opening_scene"]
+    opening = selected_greeting.replace("{{user}}", st.session_state.user_name)
     with st.chat_message("assistant"):
         st.markdown(opening)
 
@@ -419,7 +425,64 @@ for msg in st.session_state.messages_display:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ── Chat input ────────────────────────────────────────────────
+# ── Regenerate handler ────────────────────────────────────────
+if st.session_state.get("_needs_regen") and st.session_state.messages_display:
+    st.session_state._needs_regen = False
+
+    # Pop last assistant message
+    old_response = st.session_state.conv.pop_last_assistant()
+    if old_response and st.session_state.messages_display:
+        st.session_state.messages_display.pop()  # remove from display
+
+        # Get last user message
+        last_user = st.session_state.conv.get_last_user_message() or ""
+
+        # Build contexts
+        scene_context = st.session_state.scene_tracker.get_context_block()
+        memory_context = build_memory_context(
+            st.session_state.mem_store, st.session_state.user_name,
+            current_msg=last_user,
+        )
+        affection_context = st.session_state.affection.to_prompt_block()
+        has_memory = bool(memory_context)
+
+        messages = build_messages_full(
+            character_key=st.session_state.character_key,
+            conversation_window=st.session_state.conv.get_window(has_memory=has_memory),
+            user_name=st.session_state.user_name,
+            total_turns=st.session_state.conv.total_turns,
+            memory_context=memory_context,
+            scene_context=scene_context,
+            affection_context=affection_context,
+        )
+
+        # Variation instruction
+        old_snippet = old_response[:150].replace('\n', ' ')
+        messages.append({
+            "role": "system",
+            "content": (
+                f"[VARIATION] Response trước đã bị từ chối. "
+                f"Viết response HOÀN TOÀN KHÁC. Không lặp bất kỳ câu nào từ: "
+                f"'{old_snippet}...'. Dùng hành động, đối thoại, cảm xúc khác."
+            ),
+        })
+
+        with st.chat_message("assistant"):
+            start = time.time()
+            response = st.write_stream(
+                chat_stream(messages, temperature=1.0)
+            )
+            elapsed = time.time() - start
+
+            response = post_process_response(response, char["name"], gender=char.get("gender"))
+            st.caption(f"🔄 Regenerated · ⚡ {elapsed:.2f}s")
+
+        st.session_state.conv.add_assistant(response)
+        st.session_state.messages_display.append(
+            {"role": "assistant", "content": response}
+        )
+        st.rerun()
+
 if user_input := st.chat_input(f"Nhắn tin với {char['name']}..."):
 
     with st.chat_message("user"):
@@ -473,6 +536,11 @@ if user_input := st.chat_input(f"Nhắn tin với {char['name']}..."):
         mem_count = len(st.session_state.mem_store.get_all())
         mood_icon = {"neutral": "😐", "curious": "🤔", "warm": "😊", "flustered": "😳", "aroused": "🥰", "vulnerable": "🥺", "guarded": "😶", "fearful": "😨", "hurt": "😢", "trusting": "💛", "playful": "😏", "tender": "🥹"}.get(aff.mood, "😐")
         st.caption(f"⚡ {elapsed:.2f}s · {MODEL} · 📍{scene_label} · 🧠{mem_count} · {mood_icon}{aff.mood} · 💗{aff.desire_level}/10")
+
+        # Regenerate button
+        if st.button("🔄 Tạo lại", key=f"regen_{st.session_state.conv.total_turns}"):
+            st.session_state._needs_regen = True
+            st.rerun()
 
     st.session_state.conv.add_assistant(response)
     st.session_state.messages_display.append(

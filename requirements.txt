@@ -4,6 +4,7 @@
 # ── Core API ──────────────────────────────────────────────
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
+gunicorn>=22.0.0
 sse-starlette>=2.0.0
 pydantic>=2.0.0
 python-dotenv>=1.0.0
@@ -11,26 +12,16 @@ python-dotenv>=1.0.0
 # ── LLM Client ───────────────────────────────────────────
 openai>=1.30.0
 
-# ── Memory / Vector DB ───────────────────────────────────
-qdrant-client>=1.9.0
+# ── Cache & Session (Upstash Redis) ──────────────────────
+redis>=5.0.0
 
-# ── Database (Phase 2) ───────────────────────────────────
+# ── Database (Neon PostgreSQL — Phase 2) ─────────────────
 sqlalchemy>=2.0.0
-# asyncpg>=0.29.0       # uncomment when using PostgreSQL
+asyncpg>=0.29.0
 # alembic>=1.13.0       # uncomment for migrations
-
-# ── Cache (Phase 3) ──────────────────────────────────────
-# redis>=5.0.0
 
 # ── HTTP client ──────────────────────────────────────────
 httpx>=0.27.0
 
 # ── Utilities ────────────────────────────────────────────
 tiktoken>=0.7.0
-
-# ── Dev / Testing ────────────────────────────────────────
-pytest>=8.0.0
-pytest-asyncio>=0.23.0
-
-# ── Streamlit (legacy UI — will be replaced) ─────────────
-streamlit>=1.35.0

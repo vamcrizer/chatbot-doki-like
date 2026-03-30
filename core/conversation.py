@@ -72,3 +72,43 @@ class ConversationManager:
     def clear(self):
         self.history      = []
         self.total_turns  = 0
+
+    def pop_last_assistant(self) -> str | None:
+        """Remove and return the last assistant message from history.
+
+        Used by regenerate endpoint to replace the last response.
+        Also decrements total_turns since we're undoing one turn.
+        """
+        for i in range(len(self.history) - 1, -1, -1):
+            if self.history[i]["role"] == "assistant":
+                msg = self.history.pop(i)
+                self.total_turns = max(0, self.total_turns - 1)
+                return msg["content"]
+        return None
+
+    def get_last_user_message(self) -> str | None:
+        """Get the content of the most recent user message."""
+        for i in range(len(self.history) - 1, -1, -1):
+            if self.history[i]["role"] == "user":
+                return self.history[i]["content"]
+        return None
+
+    def to_dict(self) -> dict:
+        """Serialize for Redis storage."""
+        return {
+            "history": self.history,
+            "total_turns": self.total_turns,
+            "max_turns": self.max_turns,
+            "min_turns": self.min_turns,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ConversationManager":
+        """Restore from Redis data."""
+        mgr = cls(
+            max_turns=d.get("max_turns", 7),
+            min_turns=d.get("min_turns", 4),
+        )
+        mgr.history = d.get("history", [])
+        mgr.total_turns = d.get("total_turns", 0)
+        return mgr

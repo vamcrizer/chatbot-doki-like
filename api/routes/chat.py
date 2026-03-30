@@ -1,119 +1,66 @@
 """
-Chat routes — SSE streaming + memory pipeline.
+Chat routes — SSE streaming with sliding window.
 
 Flow:
-  1. Safety check input
-  2. Build memory context (semantic recall + recent facts)
-  3. Build prompt (5-layer assembly)
-  4. Stream LLM response via SSE
-  5. Post-process (POV fix)
-  6. Background: extract facts, update affection, summarize
+  1. Rate limit check (Redis ZSET)
+  2. Safety check input
+  3. Load session from Redis
+  4. Build prompt (system + conversation window)
+  5. Stream LLM response via SSE
+  6. Post-process (POV fix)
+  7. Save session to Redis (resets 30-min TTL)
+  8. Enqueue messages for DB persistence (write-behind buffer)
+  9. Background: update affection state (async, may call LLM)
+
+# TODO: Memory context (Qdrant semantic recall)
 """
+import asyncio
 import json
 import logging
-import threading
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
-from api.schemas import ChatRequest, ChatHistoryResponse, ChatMessage, SessionState
-from api.deps import get_session
+from api.schemas import (
+    ChatRequest, ChatHistoryResponse, ChatMessage, SessionState,
+    RegenerateRequest, GreetingResponse,
+)
+from api.deps import get_session, save_session, destroy_session
 from characters import get_all_characters
 from core.llm_client import chat_stream
 from core.prompt_engine import build_messages_full
+from core.rate_limit import check_rate_limit
 from core.response_processor import post_process_response
 from core.safety import check_input
-from memory.fact_extractor import extract_facts, extract_facts_lightweight
-from memory.summarizer import summarize_conversation
-from state.affection import extract_affection_update
+from core.db_buffer import enqueue as db_enqueue
 
 logger = logging.getLogger("dokichat.chat")
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
-# ── Helpers ───────────────────────────────────────────────────
+# ── Background Tasks ──────────────────────────────────────────
 
-def _build_memory_context(mem_store, user_name: str, current_msg: str = "") -> str:
-    """Build [MEMORY] block — semantic recall + recent facts."""
-    all_facts = mem_store.get_all()
-    summary = mem_store.get_summary()
+async def _update_affection_bg(session, user_msg: str, assistant_msg: str, char_name: str):
+    """Update affection state in background (non-blocking).
 
-    if not all_facts and not summary:
-        return ""
-
-    parts = []
-
-    # Semantic recall
-    relevant_texts = set()
-    if current_msg:
-        relevant_texts = set(mem_store.search(current_msg, top_k=5))
-
-    # Recent facts (always include last 5)
-    recent_texts = {f["text"] for f in all_facts[-5:]}
-
-    # Merge, dedup
-    user_facts = [f for f in all_facts if f.get("type") in ("user_fact", "emotional_state")]
-    seen = set()
-    ordered_facts = []
-
-    for f in user_facts:
-        if f["text"] in relevant_texts and f["text"] not in seen:
-            ordered_facts.append(f["text"])
-            seen.add(f["text"])
-
-    for f in user_facts:
-        if f["text"] in recent_texts and f["text"] not in seen:
-            ordered_facts.append(f["text"])
-            seen.add(f["text"])
-
-    ordered_facts = ordered_facts[:10]
-
-    if ordered_facts:
-        parts.append(f"[MEMORY — what you know about {user_name}]")
-        for text in ordered_facts:
-            parts.append(f"- {text}")
-        parts.append('Use naturally. NEVER say "I remember that..." — just ACT on it.')
-
-    char_notes = [f for f in all_facts if f.get("type") == "character_note"]
-    if char_notes:
-        parts.append("\n[CHARACTER DEVELOPMENT — what has been revealed]")
-        for f in char_notes[-5:]:
-            parts.append(f"- {f['text']}")
-        parts.append("Do NOT repeat these revelations. Build on them.")
-
-    if summary:
-        parts.append(f"\n[PREVIOUS CONTEXT]\n{summary}")
-
-    return "\n".join(parts) if parts else ""
-
-
-def _async_memory_update(mem_store, user_msg, assistant_msg, character_name,
-                         conversation_history, total_turns, summarize_every=10):
-    """Background: extract facts + summarize."""
+    Runs extract_affection_update (may call LLM) then saves
+    the updated session back to Redis. If it fails, the session
+    still has the correct conversation — only affection score
+    misses this one update.
+    """
     try:
-        existing = [m["text"] for m in mem_store.get_all()]
-        facts = extract_facts(user_msg, assistant_msg, existing, character_name=character_name)
-        light_facts = extract_facts_lightweight(user_msg)
-
-        all_facts = facts + [f for f in light_facts
-                             if not any(f["text"] == ef["text"] for ef in facts)]
-
-        if all_facts:
-            mem_store.add(all_facts)
-            logger.info(f"Stored {len(all_facts)} facts")
-
-        if total_turns > 0 and total_turns % summarize_every == 0:
-            old_summary = mem_store.get_summary()
-            new_summary = summarize_conversation(
-                conversation_history,
-                existing_summary=old_summary,
-                character_name=character_name,
+        from state.affection import AffectionState, extract_affection_update
+        if isinstance(session.affection, AffectionState):
+            session.affection = await asyncio.to_thread(
+                extract_affection_update,
+                state=session.affection,
+                user_msg=user_msg,
+                assistant_msg=assistant_msg,
+                character_name=char_name,
             )
-            if new_summary:
-                mem_store.update_summary(new_summary)
-                logger.info(f"Updated summary ({len(new_summary)} chars)")
-
+            save_session(session)
+            logger.debug(f"Affection updated: {session.affection.score}")
     except Exception as e:
-        logger.error(f"Memory update error: {e}")
+        logger.warning(f"Background affection update error: {e}")
 
 
 # ── Routes ────────────────────────────────────────────────────
@@ -127,6 +74,10 @@ async def chat_stream_endpoint(req: ChatRequest):
       - type=done: {"full": "complete response", "turn": N}
       - type=error: {"error": "message"}
     """
+    # Rate limit check (Redis ZSET sliding window)
+    if not check_rate_limit(req.user_id):
+        raise HTTPException(429, "Too many requests. Please wait a moment.")
+
     # Validate character exists
     all_chars = get_all_characters()
     if req.character_id not in all_chars:
@@ -144,32 +95,24 @@ async def chat_stream_endpoint(req: ChatRequest):
             }
         )
 
-    # Get session
+    # Load session from Redis
     session = get_session(req.user_id, req.character_id)
     session.user_name = req.user_name
-    session.content_mode = req.content_mode
     conv = session.conversation
-    mem = session.memory
     aff = session.affection
     scene = session.scene
 
-    # Build contexts
-    memory_context = _build_memory_context(mem, req.user_name, req.message)
-    scene_context = scene.get_context() if hasattr(scene, 'get_context') else ""
-    affection_context = aff.get_prompt_block() if hasattr(aff, 'get_prompt_block') else ""
-
-    # Add user message to conversation
     conv.add_user(req.message)
 
-    # Build LLM messages
     messages = build_messages_full(
         character_key=req.character_id,
-        conversation_window=conv.get_window(has_memory=bool(memory_context)),
+        conversation_window=conv.get_window(),
         user_name=req.user_name,
         total_turns=conv.total_turns,
-        memory_context=memory_context,
-        scene_context=scene_context,
-        affection_context=affection_context,
+        memory_context="",  # TODO: Qdrant
+        scene_context=scene.get_context_block() if hasattr(scene, 'get_context_block') else "",
+        affection_context=aff.to_prompt_block() if hasattr(aff, 'to_prompt_block') else "",
+        user_message=req.message,
     )
 
     async def event_generator():
@@ -183,45 +126,35 @@ async def chat_stream_endpoint(req: ChatRequest):
                 }
 
             # Post-process
-            processed = post_process_response(full_response)
+            char_name = all_chars[req.character_id].get("name", req.character_id)
+            char_gender = all_chars[req.character_id].get("gender")
+            processed = post_process_response(full_response, char_name, char_gender)
 
-            # Add to conversation
+            # Update session state (sync — fast operations)
             conv.add_assistant(processed)
 
-            # Update scene
             if hasattr(scene, 'update'):
-                scene.update(req.message, processed)
+                scene.update(req.message)
 
-            # Update affection (background)
-            if hasattr(aff, 'update'):
-                try:
-                    aff_update = extract_affection_update(
-                        req.message, processed,
-                        current_score=aff.score if hasattr(aff, 'score') else 0,
-                    )
-                    if aff_update:
-                        aff.apply(aff_update)
-                except Exception as e:
-                    logger.warning(f"Affection update error: {e}")
+            # Save session immediately (resets 30-min TTL)
+            save_session(session)
 
-            # Background memory update
-            char_name = all_chars[req.character_id].get("name", req.character_id)
-            thread = threading.Thread(
-                target=_async_memory_update,
-                args=(mem, req.message, processed, char_name,
-                      conv.history, conv.total_turns),
-                daemon=True,
-            )
-            thread.start()
+            # Enqueue for DB persistence (non-blocking, flushed every 30s)
+            db_enqueue(req.user_id, req.character_id, "user", req.message, conv.total_turns)
+            db_enqueue(req.user_id, req.character_id, "assistant", processed, conv.total_turns)
 
-            # Final event
+            # Background: affection update (async — may call LLM)
+            asyncio.create_task(_update_affection_bg(
+                session, req.message, processed, char_name,
+            ))
+
             yield {
                 "event": "done",
                 "data": json.dumps({
                     "full": processed,
                     "turn": conv.total_turns,
-                    "emotion": "neutral",  # TODO: detect
-                    "affection": aff.score if hasattr(aff, 'score') else 0,
+                    "emotion": "neutral",
+                    "affection": session.affection.score if hasattr(session.affection, 'score') else 0,
                 }, ensure_ascii=False),
             }
 
@@ -268,7 +201,119 @@ async def get_session_state(user_id: str, character_id: str):
 
 @router.post("/reset/{user_id}/{character_id}")
 async def reset_conversation(user_id: str, character_id: str):
-    """Reset conversation history (keep memories)."""
-    session = get_session(user_id, character_id)
-    session.conversation.clear()
+    """Reset conversation history."""
+    destroy_session(user_id, character_id)
     return {"status": "ok", "message": "Conversation reset"}
+
+
+@router.post("/regenerate")
+async def regenerate_response(req: RegenerateRequest):
+    """Regenerate the last assistant response with variation."""
+    all_chars = get_all_characters()
+    if req.character_id not in all_chars:
+        raise HTTPException(404, f"Character '{req.character_id}' not found")
+
+    session = get_session(req.user_id, req.character_id)
+    conv = session.conversation
+
+    if conv.total_turns < 1:
+        raise HTTPException(400, "No message to regenerate")
+
+    old_response = conv.pop_last_assistant()
+    if not old_response:
+        raise HTTPException(400, "No assistant message found")
+
+    last_user_msg = conv.get_last_user_message() or ""
+
+    messages = build_messages_full(
+        character_key=req.character_id,
+        conversation_window=conv.get_window(),
+        user_name=req.user_name,
+        total_turns=conv.total_turns,
+        memory_context="",  # TODO: Qdrant
+        scene_context=session.scene.get_context_block() if hasattr(session.scene, 'get_context_block') else "",
+        affection_context=session.affection.to_prompt_block() if hasattr(session.affection, 'to_prompt_block') else "",
+        user_message=last_user_msg,
+    )
+
+    old_snippet = old_response[:150].replace('\n', ' ')
+    messages.append({
+        "role": "system",
+        "content": (
+            f"[VARIATION] The previous response was rejected by the user. "
+            f"Write a COMPLETELY DIFFERENT response. Do NOT repeat any phrases, "
+            f"sentences, or ideas from this: '{old_snippet}...'. "
+            f"Use different actions, different dialogue, different emotions."
+        ),
+    })
+
+    async def event_generator():
+        full_response = ""
+        try:
+            for chunk in chat_stream(messages, temperature=1.0):
+                full_response += chunk
+                yield {
+                    "event": "token",
+                    "data": json.dumps({"t": chunk}, ensure_ascii=False),
+                }
+
+            char_data = all_chars[req.character_id]
+            processed = post_process_response(
+                full_response,
+                char_data.get("name", req.character_id),
+                char_data.get("gender"),
+            )
+            conv.add_assistant(processed)
+
+            # Save session to Redis (resets 30-min TTL)
+            save_session(session)
+
+            # Enqueue regenerated response for DB persistence
+            db_enqueue(req.user_id, req.character_id, "assistant", processed, conv.total_turns)
+
+            yield {
+                "event": "done",
+                "data": json.dumps({
+                    "full": processed,
+                    "turn": conv.total_turns,
+                    "regenerated": True,
+                }, ensure_ascii=False),
+            }
+
+        except Exception as e:
+            logger.error(f"Regenerate stream error: {e}")
+            conv.add_assistant(old_response)
+            save_session(session)
+            yield {
+                "event": "error",
+                "data": json.dumps({"error": str(e)}),
+            }
+
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/greeting/{character_id}", response_model=GreetingResponse)
+async def get_greeting(character_id: str, user_name: str = "bạn"):
+    """Get a random greeting from the character's greeting pool."""
+    import random
+
+    all_chars = get_all_characters()
+    if character_id not in all_chars:
+        raise HTTPException(404, f"Character '{character_id}' not found")
+
+    char = all_chars[character_id]
+    greetings = [char.get("opening_scene", "")]
+    greetings.extend(char.get("greetings_alt", []))
+    greetings = [g for g in greetings if g and g.strip()]
+
+    if not greetings:
+        raise HTTPException(500, "Character has no greetings")
+
+    selected = random.choice(greetings)
+    selected = selected.replace("{{user}}", user_name)
+
+    return GreetingResponse(
+        character_id=character_id,
+        greeting=selected,
+        total_greetings=len(greetings),
+    )

@@ -1,5 +1,5 @@
 """
-Character routes — list, create, delete characters.
+Character routes — list, create, delete, generate prompts and greetings.
 """
 import logging
 from fastapi import APIRouter, HTTPException
@@ -10,108 +10,140 @@ from api.schemas import (
     CharacterCreateRequest,
     CharacterCreateResponse,
     CharacterDeleteRequest,
+    GeneratePromptRequest,
+    GeneratePromptResponse,
+    GenerateGreetingRequest,
+    GenerateGreetingResponse,
 )
-from characters import get_all_characters
-from characters.generator import (
-    generate_character_from_bio,
-    generate_emotional_states,
-    save_character,
-    delete_character,
-)
+from core.llm_client import chat_complete
+from services.character_service import CharacterService
 
-logger = logging.getLogger("dokichat.character")
+logger = logging.getLogger("dokichat.routes.character")
 router = APIRouter(prefix="/character", tags=["character"])
 
-# Hardcoded character keys (cannot be deleted)
-BUILTIN_KEYS = {"kael", "seraphine", "ren", "linh_dan", "sol"}
 
+def _llm_call_fn(messages: list, max_tokens: int = 1024) -> str:
+    """Bridge: adapt chat_complete to generator's expected interface."""
+    return chat_complete(messages, temperature=0.7, max_tokens=max_tokens)
+
+
+# Shared service instance
+_service = CharacterService(llm_call_fn=_llm_call_fn)
+
+
+# ── List / Detail ─────────────────────────────────────────────
 
 @router.get("/list", response_model=CharacterListResponse)
 async def list_characters():
     """List all available characters (builtin + custom)."""
-    all_chars = get_all_characters()
+    results = _service.list_all()
     summaries = []
-    for key, char in all_chars.items():
+    for c in results:
         summaries.append(CharacterSummary(
-            key=key,
-            name=char.get("name", key),
-            gender=char.get("gender"),
-            setting=char.get("setting"),
-            is_custom=key not in BUILTIN_KEYS,
+            id=c.get("key", ""),
+            name=c.get("name", ""),
+            gender=c.get("gender"),
+            is_custom=c.get("is_custom", False),
         ))
     return CharacterListResponse(characters=summaries)
 
 
 @router.get("/detail/{character_id}")
 async def get_character_detail(character_id: str):
-    """Get character details (excluding full system prompt for security)."""
-    all_chars = get_all_characters()
-    if character_id not in all_chars:
+    """Get character details (excluding full system prompt)."""
+    detail = _service.get_detail(character_id)
+    if not detail:
         raise HTTPException(404, f"Character '{character_id}' not found")
+    return detail
 
-    char = all_chars[character_id]
-    return {
-        "key": character_id,
-        "name": char.get("name", character_id),
-        "gender": char.get("gender"),
-        "setting": char.get("setting"),
-        "opening_scene": char.get("opening_scene", ""),
-        "immersion_prompt": char.get("immersion_prompt", ""),
-        "is_custom": character_id not in BUILTIN_KEYS,
-        "system_prompt_length": len(char.get("system_prompt", "")),
-    }
 
+# ── Generate (no save) ────────────────────────────────────────
+
+@router.post("/generate-prompt", response_model=GeneratePromptResponse)
+async def generate_prompt(req: GeneratePromptRequest):
+    """Generate a system prompt from C.AI fields. Does NOT save.
+
+    User reviews the result, optionally edits, then calls /create.
+    """
+    try:
+        result = _service.gen_prompt(
+            bio=req.bio,  # computed property: combines subtitle + description + definition
+            name=req.name,
+            gender=req.gender,
+            content_mode=req.content_mode,
+        )
+        return GeneratePromptResponse(
+            content_mode=req.content_mode,
+            **result,
+        )
+    except Exception as e:
+        logger.error(f"Prompt generation failed: {e}")
+        raise HTTPException(500, f"Generation failed: {e}")
+
+
+@router.post("/generate-greeting", response_model=GenerateGreetingResponse)
+async def generate_greeting(req: GenerateGreetingRequest):
+    """Generate ONE greeting. This is the "Viết cho tôi" button.
+
+    User can call this multiple times to build greetings_alt[].
+    """
+    try:
+        greeting = _service.gen_greeting(
+            bio=req.bio,  # computed property
+            name=req.name,
+            gender=req.gender,
+            personality=req.personality,  # computed property
+            existing_greetings=req.existing_greetings,
+        )
+        return GenerateGreetingResponse(
+            greeting=greeting,
+            word_count=len(greeting.split()),
+        )
+    except Exception as e:
+        logger.error(f"Greeting generation failed: {e}")
+        raise HTTPException(500, f"Generation failed: {e}")
+
+
+# ── Create (save) ─────────────────────────────────────────────
 
 @router.post("/create", response_model=CharacterCreateResponse)
 async def create_character(req: CharacterCreateRequest):
-    """Generate a new character from a bio using LLM.
+    """Save a new character. User provides all data including system_prompt.
 
-    This is a long-running operation (~15-30s on H100).
+    Typical flow:
+    1. POST /generate-prompt → get system_prompt
+    2. User reviews/edits prompt
+    3. POST /generate-greeting (optional, "Viết cho tôi") → get greeting(s)
+    4. POST /create → save everything
     """
-    logger.info(f"Generating character from bio ({len(req.bio)} chars, mode={req.content_mode})")
-
     try:
-        # Generate character data
-        char_data = generate_character_from_bio(req.bio, content_mode=req.content_mode)
-        char_data["_bio"] = req.bio
-
-        # Generate emotional states
-        emo_states = generate_emotional_states(req.bio, char_data.get("name", ""))
-
-        # Save
-        key = save_character(char_data, emo_states)
-
-        # Count sections in generated prompt
-        sp = char_data.get("system_prompt", "")
-        section_markers = [
-            "RULE 0", "CORE PHILOSOPHY", "FORBIDDEN", "CHARACTER", "WOUND",
-            "VOICE", "NARRATIVE STYLE", "PROPS", "CONTRADICTION", "CHALLENGE",
-            "ENGAGEMENT", "SENSES", "INTIMACY", "ROMANTIC", "18+",
-            "RECOVERY", "MEMORY INTEGRITY", "SAFETY",
-        ]
-        sections_found = sum(1 for m in section_markers if m.upper() in sp.upper())
-
-        logger.info(f"Created character '{key}' ({sections_found}/18 sections)")
-
-        return CharacterCreateResponse(
-            key=key,
-            name=char_data.get("name", key),
-            system_prompt_length=len(sp),
-            sections_detected=sections_found,
+        result = _service.create(
+            name=req.name,
+            gender=req.gender,
+            bio=req.bio,  # computed property
+            system_prompt=req.system_prompt,
+            opening_scene=req.opening_scene,
+            greetings_alt=req.greetings_alt,
+            content_mode=req.content_mode,
+            pacing=req.pacing,
         )
-
+        return CharacterCreateResponse(
+            id=result["key"],
+            name=result["name"],
+            content_mode=req.content_mode,
+            system_prompt_length=result["system_prompt_length"],
+            greetings_count=1 + len(req.greetings_alt),
+        )
     except Exception as e:
-        logger.error(f"Character generation failed: {e}")
-        raise HTTPException(500, f"Generation failed: {e}")
+        logger.error(f"Character creation failed: {e}")
+        raise HTTPException(500, f"Creation failed: {e}")
 
+
+# ── Delete ────────────────────────────────────────────────────
 
 @router.delete("/delete")
 async def delete_character_endpoint(req: CharacterDeleteRequest):
     """Delete a custom character. Cannot delete builtin characters."""
-    if req.key in BUILTIN_KEYS:
-        raise HTTPException(400, f"Cannot delete builtin character '{req.key}'")
-
-    if delete_character(req.key):
-        return {"status": "ok", "message": f"Character '{req.key}' deleted"}
-    else:
-        raise HTTPException(404, f"Character '{req.key}' not found")
+    if not _service.delete(req.id):
+        raise HTTPException(400, f"Cannot delete '{req.id}' (builtin or not found)")
+    return {"status": "ok", "message": f"Character '{req.id}' deleted"}

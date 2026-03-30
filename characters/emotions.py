@@ -6,7 +6,7 @@ Provides:
   - detect_emotional_state(): Keyword-based detection from conversation
   - get_all_emotional_states(): Merged hardcoded + custom states
 """
-from characters.generator import load_custom_emotional_states
+from characters.storage import load_custom_emotional_states
 
 EMOTIONAL_STATES = {
     "kael": {

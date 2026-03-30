@@ -1,11 +1,12 @@
 """
-Database connection — async SQLAlchemy engine + session factory.
+Database connection — SQLAlchemy engine + session factory.
 
 Graceful degradation: if DATABASE_URL is not set, returns None.
-All repositories check for this and fall back to in-memory.
+All repositories check for this and fall back to in-memory storage.
 """
 import logging
 from typing import Optional
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,10 +39,10 @@ def get_engine():
             pool_pre_ping=True,
             echo=False,
         )
-        logger.info(f"✅ Database connected: {db_url[:30]}...")
+        logger.info(f"Database connected: {db_url[:30]}...")
         return _engine
     except Exception as e:
-        logger.error(f"❌ Database connection failed: {e}")
+        logger.error(f"Database connection failed: {e}")
         return None
 
 
@@ -67,13 +68,13 @@ def get_db() -> Optional[Session]:
     return factory()
 
 
-def init_db():
-    """Create all tables. Call once on first setup."""
+def init_db() -> bool:
+    """Create all tables from ORM models. Call once on first setup."""
     engine = get_engine()
     if engine is None:
         logger.warning("Cannot init DB — no DATABASE_URL")
         return False
 
     Base.metadata.create_all(engine)
-    logger.info("✅ Database tables created")
+    logger.info("Database tables created")
     return True

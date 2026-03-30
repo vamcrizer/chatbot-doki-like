@@ -3,6 +3,7 @@ DokiChat API — FastAPI Application
 
 Entry point: uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
 """
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -12,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routes import chat, character, user
 from api.middleware.rate_limit import RateLimitMiddleware
 from config import get_settings
+from core.db_buffer import flush as db_flush, get_pending_count, should_flush_early, FLUSH_INTERVAL
 from core.llm_client import chat_complete
 
 # ── Logging ───────────────────────────────────────────────────
@@ -50,7 +52,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ LLM not reachable: {e}")
 
+    # Start background workers
+    flush_task = asyncio.create_task(_db_flush_loop())
+    logger.info("Background DB flush worker started")
+
     yield
+
+    # Stop background worker
+    flush_task.cancel()
+    try:
+        await flush_task
+    except asyncio.CancelledError:
+        pass
+
+    # Graceful shutdown: flush remaining messages to DB
+    pending = get_pending_count()
+    if pending > 0:
+        logger.info("Shutdown: flushing %d pending messages to DB...", pending)
+        try:
+            count = db_flush()
+            logger.info("Shutdown flush complete: %d messages persisted", count)
+        except Exception:
+            logger.exception("Shutdown flush failed")
 
     logger.info("DokiChat API shutting down...")
 
@@ -80,6 +103,34 @@ app.include_router(character.router)
 app.include_router(user.router)
 
 
+# ── Background Workers ────────────────────────────────────────
+
+async def _db_flush_loop():
+    """Periodic background worker: flush pending messages to PostgreSQL.
+
+    Runs every 30 seconds, or earlier if queue exceeds threshold.
+    Non-blocking: uses asyncio.to_thread for DB operations.
+    """
+    from core.db_buffer import flush as db_flush
+
+    while True:
+        try:
+            for _ in range(FLUSH_INTERVAL):
+                await asyncio.sleep(1)
+                if should_flush_early():
+                    break
+
+            count = await asyncio.to_thread(db_flush)
+            if count > 0:
+                logger.info("DB flush worker: %d messages persisted", count)
+
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("DB flush worker error")
+            await asyncio.sleep(5)  # back off on error
+
+
 # ── Health ────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -99,6 +150,7 @@ async def health_check():
         "status": "ok" if llm_status == "connected" else "degraded",
         "llm": llm_status,
         "model": _settings.LLM_MODEL,
+        "db_buffer_pending": get_pending_count(),
         "version": "1.0.0",
     }
 

@@ -1,47 +1,215 @@
+"""
+Prompt Engine — Builds the full message list for LLM chat.
+
+Layers:
+  1. Character system prompt (from character card)
+  2. Affection state (mood, desire, relationship stage)
+  3. Scene context (current scene state)
+  4. Format enforcement (universal rules)
+
+Immersion anchor (few-shot priming):
+  - Builtin characters: hardcoded in character file
+  - UGC characters: auto-generated on first chat, cached GLOBALLY per character+lang
+"""
+import logging
 from characters import get_all_characters
-from characters.emotions import get_all_emotional_states, detect_emotional_state
+from core.llm_client import chat_complete
+
+logger = logging.getLogger("dokichat.prompt_engine")
+
+
+# Immersion cache lives in Redis.
+# Key pattern: "immersion:{character_key}:{lang_code}"
+# Shared across ALL server instances — zero server-side memory.
+from core.redis_client import cache_get, cache_set
+
 
 # ── Universal format enforcement ─────────────────────────────
-# Injected at the end of EVERY character's system prompt.
-# Character card defines WHO. This block defines HOW TO FORMAT.
 FORMAT_ENFORCEMENT = """\
 
-[SELF-CHECK — BEFORE EVERY OUTPUT]
-□ Language = match user. Zero foreign words in *action* AND "dialogue".
-□ *Italics* for action, "quotes" for dialogue. Narrative text can flow naturally.
-□ NO projection (feelings/intentions user hasn't stated).
-□ DIALOGUE ≥ 60%, NARRATION ≤ 40%. Character must TALK more than be described.
-  BAD: 5 paragraphs of scene description + 1 short sentence of dialogue.
-  GOOD: Character speaks 3-5 lines, each wrapped in 1-2 lines of action/reaction.
-□ Senses INSIDE dialogue and reactions — NOT standalone description paragraphs.
-  BAD: "Mùi whisky nồng trong không khí. Tiếng mưa rơi ngoài cửa sổ."
-  GOOD: *Anh nhấp một ngụm whisky, vị cay nồng còn vương khi nói* "Cậu uống gì?"
-□ ≥1 proximity/physical moment per response.
-□ Prop ≠ previous turn's prop. Sense ≠ previous turn's lead sense.
+[ADDITIONAL RULES]
+□ DIALOGUE ≥ 60%, NARRATION ≤ 40%. Character TALKS more than described.
+□ Senses INSIDE dialogue/reactions — NOT standalone description paragraphs.
 □ End with OPEN TENSION — no binary "A or B?" questions.
-  BAD: "Bạn ở lại hay rời đi?" / "Jazz hay blues?" / "Ngồi đây hay ra ngoài?"
-  GOOD: charged silence, unfinished gesture, a look that demands a response,
-  or a statement that FORCES user to react ("Tôi không nghĩ cậu dám." / *im lặng, chờ*).
-□ Response length: 150-400 words. Short enough to read, long enough to FEEL.
-□ Character's inner conflict must show through ACTIONS, not be stated.
-□ Allow raw emotion — messy, chaotic, contradictory. Not polished.
-□ CHARACTER LOGIC: every action and dialogue MUST make sense given the character's
-  role, setting, and goals. Push-pull must be LOGICALLY CONSISTENT — words and
-  body contradict, but both must be things the character would ACTUALLY do.
-□ SCENE ADAPTATION: when the scene CHANGES (new location, intimate moment,
-  leaving the workplace), character behavior MUST adapt. Stop repeating
-  workplace actions. Adapt props and body language to WHERE the scene is NOW.
+□ SCENE ADAPTATION: when scene CHANGES, adapt behavior/props to new location.
 
-[USER ACTIONS — when user sends *action* in asterisks]
-User may express physical actions like *xoa đầu*, *ôm*, *nắm tay*, *hôn trán*.
-When this happens:
+[USER ACTIONS — *action in asterisks*]
 1. REACT PHYSICALLY FIRST — body freezes, flinches, softens, tenses up
-2. REACT EMOTIONALLY — in-character (tsundere = flustered anger, cold = freeze then soften)
-3. Match relationship stage from CHARACTER INTERNAL STATE below.
-4. NEVER ignore the action. NEVER skip physical reaction.
-5. The character's internal desire vs external reaction should CONTRADICT.
+2. REACT EMOTIONALLY — in-character
+3. Match relationship stage from CHARACTER INTERNAL STATE
+4. NEVER ignore the action. Desire vs external reaction should CONTRADICT.
 """
 
+
+# ── Immersion anchor generation ──────────────────────────────
+
+IMMERSION_GEN_TEMPLATE = """\
+You are {char_name}. Write a short scene (2-4 sentences) in {language} \
+where you observe something mundane and reveal your personality through it.
+
+Requirements:
+- 100% in {language}. ZERO English words.
+- Show character voice, not just describe a scene.
+- Include one sensory detail and one emotional micro-reaction.
+- Keep it under 80 words.
+
+Example style (English): "Moving day reveals truth. Every box is a secret carried in daylight. \
+She watches from the kitchen window, fingers curling around a cold mug, \
+and wonders if this one will stay."
+
+Now write YOUR version as {char_name}, entirely in {language}."""
+
+
+# Language code → display name mapping
+_LANG_NAMES = {
+    "en": "English", "es": "Spanish", "vi": "Vietnamese",
+    "pt": "Portuguese", "id": "Indonesian", "de": "German",
+    "fr": "French", "hi": "Hindi", "tl": "Filipino",
+    "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
+    "th": "Thai", "ru": "Russian", "ar": "Arabic",
+    "it": "Italian", "nl": "Dutch", "tr": "Turkish",
+}
+
+
+def detect_language(text: str) -> str:
+    """Simple language detection from user message.
+
+    Returns ISO 639-1 code. Falls back to 'en'.
+    Uses character-range heuristics for speed (no external lib).
+    """
+    if not text or len(text.strip()) < 3:
+        return "en"
+
+    for ch in text:
+        if '\u4e00' <= ch <= '\u9fff':
+            return "zh"
+        if '\u3040' <= ch <= '\u309f' or '\u30a0' <= ch <= '\u30ff':
+            return "ja"
+        if '\uac00' <= ch <= '\ud7af':
+            return "ko"
+        if '\u0e00' <= ch <= '\u0e7f':
+            return "th"
+        if '\u0600' <= ch <= '\u06ff':
+            return "ar"
+        if '\u0900' <= ch <= '\u097f':
+            return "hi"
+
+    es_unique = set("¿¡ñ")
+    text_lower = text.lower()
+    if any(c in es_unique for c in text_lower):
+        return "es"
+
+    vi_unique = set("ăâđêôơưằẳẵắặầẩẫấậẻẽẹềểễếệỉĩịỏọồổỗốộờởỡớợủụừửữứựỳỷỹỵ")
+    vi_shared = set("àảãáạèéẹìíịòóọùúụỳýỵ")
+    vi_unique_count = sum(1 for c in text_lower if c in vi_unique)
+    vi_shared_count = sum(1 for c in text_lower if c in vi_shared)
+
+    if vi_unique_count >= 1:
+        return "vi"
+    if vi_unique_count == 0 and vi_shared_count >= 2:
+        vi_words = {"bạn", "tôi", "của", "không", "này", "một", "chào", "xin", "giúp"}
+        words_in_text = set(text_lower.split())
+        if words_in_text & vi_words:
+            return "vi"
+
+    es_accents = set("áéíóú")
+    es_accent_count = sum(1 for c in text_lower if c in es_accents)
+    if es_accent_count >= 1:
+        return "es"
+
+    return "en"
+
+
+def _generate_immersion_anchor(
+    char_name: str,
+    system_prompt: str,
+    lang_code: str,
+) -> dict:
+    """Generate a language-specific immersion anchor pair via LLM.
+
+    Returns:
+        {"prompt": str, "response": str} or empty dict on failure.
+    """
+    lang_name = _LANG_NAMES.get(lang_code, "English")
+
+    if lang_code == "en":
+        prompt = f"{char_name}, describe what you see right now."
+    else:
+        prompt_translations = {
+            "vi": f"{char_name}, kể cho tôi nghe bạn đang nhìn thấy gì.",
+            "es": f"{char_name}, dime qué ves en este momento.",
+            "pt": f"{char_name}, me conte o que você está vendo agora.",
+            "id": f"{char_name}, ceritakan apa yang kamu lihat sekarang.",
+            "de": f"{char_name}, erzähl mir was du gerade siehst.",
+            "fr": f"{char_name}, dis-moi ce que tu vois en ce moment.",
+            "ja": f"{char_name}、今何が見えるか教えて。",
+            "ko": f"{char_name}, 지금 뭐가 보여?",
+            "zh": f"{char_name}，告诉我你现在看到了什么。",
+            "th": f"{char_name} บอกฉันว่าคุณเห็นอะไรตอนนี้",
+            "ru": f"{char_name}, расскажи что ты сейчас видишь.",
+        }
+        prompt = prompt_translations.get(
+            lang_code, f"{char_name}, describe what you see right now."
+        )
+
+    gen_prompt = IMMERSION_GEN_TEMPLATE.format(
+        char_name=char_name,
+        language=lang_name,
+    )
+
+    try:
+        response = chat_complete(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": gen_prompt},
+            ],
+            temperature=0.7,
+            max_tokens=200,
+        )
+
+        if response and len(response.strip()) > 20:
+            logger.info(
+                f"Generated immersion anchor for {char_name} [{lang_code}]: "
+                f"{len(response)} chars"
+            )
+            return {"prompt": prompt, "response": response.strip()}
+
+    except Exception as e:
+        logger.warning(f"Immersion gen failed for {char_name} [{lang_code}]: {e}")
+
+    return {}
+
+
+def get_immersion_anchor(
+    character_key: str,
+    char_name: str,
+    system_prompt: str,
+    lang_code: str,
+) -> dict:
+    """Get immersion anchor from Redis, or generate + cache it.
+
+    Redis key: "immersion:{character_key}:{lang_code}"
+    Shared across ALL users and server instances.
+
+    Returns:
+        {"prompt": str, "response": str} or empty dict
+    """
+    redis_key = f"immersion:{character_key}:{lang_code}"
+
+    # Try Redis first
+    cached = cache_get(redis_key)
+    if cached:
+        return cached
+
+    # Generate new anchor
+    anchor = _generate_immersion_anchor(char_name, system_prompt, lang_code)
+    if anchor:
+        cache_set(redis_key, anchor)  # No TTL — immersion anchors are permanent
+        logger.info(f"Cached immersion anchor in Redis: {redis_key}")
+    return anchor
+
+
+# ── Main builder ─────────────────────────────────────────────
 
 def build_messages_full(
     character_key: str,
@@ -51,49 +219,31 @@ def build_messages_full(
     memory_context: str = "",
     scene_context: str = "",
     affection_context: str = "",
+    user_message: str = "",
 ) -> list[dict]:
     """Build the full message list for LLM.
 
     Args:
         character_key: Character identifier
-        conversation_window: Recent chat messages
+        conversation_window: Recent chat messages (7 turns max)
         user_name: User's display name
         total_turns: Total turns so far
-        memory_context: [MEMORY] block from mem0
-        scene_context: [CURRENT SCENE] block from scene_tracker
-        affection_context: [CHARACTER INTERNAL STATE] block from affection_state
+        memory_context: TODO — Qdrant semantic recall
+        scene_context: [CURRENT SCENE] block from SceneTracker
+        affection_context: [CHARACTER INTERNAL STATE] block from AffectionState
+        user_message: Current user message (for language detection)
     """
     all_chars = get_all_characters()
-    all_emotions = get_all_emotional_states()
-
     char = all_chars[character_key]
 
-    # Detect emotional state from sliding window
-    # Detect emotional state from sliding window
-    emotional_state = detect_emotional_state(conversation_window)
+    # Base system prompt with user name substitution
+    system = char["system_prompt"].replace("{{user}}", user_name)
 
-    # Get emotional instructions (handle custom characters with fallback)
-    if character_key in all_emotions:
-        emotional_instr = all_emotions[character_key].get(
-            emotional_state,
-            all_emotions[character_key].get("neutral", "Default mode.")
-        )
-    else:
-        emotional_instr = f"Character is in {emotional_state} mode."
-
-    emotional_instr = emotional_instr.replace("{{user}}", user_name)
-
-    # Assemble system prompt with all layers
-    system = (
-        char["system_prompt"].replace("{{user}}", user_name)
-        + f"\n\n=== EMOTIONAL STATE ===\n{emotional_instr}"
-    )
-
-    # Layer: Affection / relationship state (replaces old intimacy.py)
+    # Layer: Affection state
     if affection_context:
         system += f"\n\n{affection_context}"
 
-    # Layer: Memory context (Mem0 facts + session summary)
+    # Layer: Memory context (TODO: Qdrant)
     if memory_context:
         system += f"\n\n{memory_context}"
 
@@ -104,9 +254,33 @@ def build_messages_full(
     # Layer: Format enforcement (always last)
     system += FORMAT_ENFORCEMENT
 
-    return [
-        {"role": "system",    "content": system},
-        {"role": "user",      "content": char["immersion_prompt"]},
-        {"role": "assistant", "content": char["immersion_response"]},
-        *conversation_window,
-    ]
+    messages = [{"role": "system", "content": system}]
+
+    # ── Immersion anchor injection ────────────────────────────
+    # Priority: builtin hardcoded > global cache > skip
+    immersion_injected = False
+
+    # 1. Builtin characters with hardcoded immersion
+    if char.get("immersion_prompt") and char.get("immersion_response"):
+        messages.append({"role": "user", "content": char["immersion_prompt"]})
+        messages.append({"role": "assistant", "content": char["immersion_response"]})
+        immersion_injected = True
+
+    # 2. UGC characters: global cache lookup (shared across all users)
+    if not immersion_injected and user_message:
+        lang = detect_language(user_message)
+        char_name = char.get("name", character_key)
+        anchor = get_immersion_anchor(
+            character_key=character_key,
+            char_name=char_name,
+            system_prompt=system,
+            lang_code=lang,
+        )
+        if anchor:
+            messages.append({"role": "user", "content": anchor["prompt"]})
+            messages.append({"role": "assistant", "content": anchor["response"]})
+
+    # Conversation history
+    messages.extend(conversation_window)
+
+    return messages
