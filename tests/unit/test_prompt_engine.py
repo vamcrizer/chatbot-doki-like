@@ -37,9 +37,22 @@ class TestDetectLanguage:
         assert detect_language("Hi") == "en"
 
     def test_emoji_only(self):
-        # Emoji-only should fallback to en (langdetect can't detect)
+        # Emoji-only crashes langdetect, fallback to en
         result = detect_language("😭😭😭")
         assert result == "en"
+
+    def test_japanese_with_emoji_not_pulled_to_en(self):
+        """Emoji mixed with real text must NOT override language detection."""
+        result = detect_language("こんにちは😭😭😭")
+        assert result == "ja"
+
+    def test_korean_with_emoji_not_pulled_to_en(self):
+        result = detect_language("오늘 기분이 좋아요 😊😊")
+        assert result == "ko"
+
+    def test_french_with_emoji_not_pulled_to_en(self):
+        result = detect_language("Bonjour mon ami 🥰🥰🥰")
+        assert result == "fr"
 
     def test_none_input(self):
         result = detect_language(None)
