@@ -21,7 +21,7 @@ from core.response_processor import post_process_response
 from core.safety import check_input
 from state.affection import extract_affection_update
 
-logger = logging.getLogger("dokichat.service.chat")
+logger = logging.getLogger("ai_companion.service.chat")
 
 
 class SafetyError(Exception):

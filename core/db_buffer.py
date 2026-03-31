@@ -25,7 +25,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-logger = logging.getLogger("dokichat.db_buffer")
+logger = logging.getLogger("ai_companion.db_buffer")
 
 
 # ── Data Types ────────────────────────────────────────────────

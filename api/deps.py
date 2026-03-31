@@ -19,7 +19,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from config import get_settings
 from core.redis_client import session_load, session_save
 
-logger = logging.getLogger("dokichat.deps")
+logger = logging.getLogger("ai_companion.deps")
 
 # ── Auth dependency ───────────────────────────────────────────
 

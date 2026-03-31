@@ -13,7 +13,7 @@ from db.repositories.base import BaseRepository
 if TYPE_CHECKING:
     from core.db_buffer import PendingMessage
 
-logger = logging.getLogger("dokichat.repo.chat")
+logger = logging.getLogger("ai_companion.repo.chat")
 
 
 class InMemoryChatRepository(BaseRepository):

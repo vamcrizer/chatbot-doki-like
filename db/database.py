@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from config import get_settings
 from db.models import Base
 
-logger = logging.getLogger("dokichat.db")
+logger = logging.getLogger("ai_companion.db")
 
 _settings = get_settings()
 _engine = None

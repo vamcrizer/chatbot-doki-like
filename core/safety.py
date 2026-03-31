@@ -1,5 +1,5 @@
 """
-Safety Filter — Application-level checks for DokiChat 18+.
+Safety Filter — Application-level checks for AI Companion 18+.
 
 Primary safety is handled via PROMPT-LEVEL instructions in FORMAT_ENFORCEMENT
 (see prompt_builder.py). This module provides lightweight, language-agnostic

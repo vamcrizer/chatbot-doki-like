@@ -1,5 +1,5 @@
 """
-DokiChat — JWT & Password Utilities
+AI Companion — JWT & Password Utilities
 
 Design:
   - Access token:  short-lived (30 min), HS256 JWT, sent as Bearer header

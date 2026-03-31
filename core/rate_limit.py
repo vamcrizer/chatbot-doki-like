@@ -10,7 +10,7 @@ import time
 import logging
 from core.redis_client import get_redis
 
-logger = logging.getLogger("dokichat.ratelimit")
+logger = logging.getLogger("ai_companion.ratelimit")
 
 MAX_REQUESTS_PER_MINUTE = 30
 

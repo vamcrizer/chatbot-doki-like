@@ -14,7 +14,7 @@ Public API:
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-logger = logging.getLogger("dokichat.generator")
+logger = logging.getLogger("ai_companion.generator")
 
 # ═══════════════════════════════════════════════════════════════
 # TEMPLATE — Matches Sol V3.2.3 proven structure

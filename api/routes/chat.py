@@ -34,7 +34,7 @@ from core.response_processor import post_process_response
 from core.safety import check_input
 from core.db_buffer import enqueue as db_enqueue
 
-logger = logging.getLogger("dokichat.chat")
+logger = logging.getLogger("ai_companion.chat")
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 

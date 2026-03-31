@@ -15,7 +15,7 @@ from openai import OpenAI
 
 from config import get_settings
 
-logger = logging.getLogger("dokichat.llm")
+logger = logging.getLogger("ai_companion.llm")
 
 _settings = get_settings()
 

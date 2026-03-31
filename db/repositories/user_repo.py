@@ -10,7 +10,7 @@ from typing import Optional
 
 from db.repositories.base import BaseRepository
 
-logger = logging.getLogger("dokichat.repo.user")
+logger = logging.getLogger("ai_companion.repo.user")
 
 
 class InMemoryUserRepository(BaseRepository):

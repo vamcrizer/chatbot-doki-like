@@ -1,5 +1,5 @@
 """
-DokiChat — OAuth2 Provider Integrations (Google, Apple)
+AI Companion — OAuth2 Provider Integrations (Google, Apple)
 
 Design:
   - Provider classes encapsulate all provider-specific logic
@@ -38,7 +38,7 @@ from jose import jwt as jose_jwt
 
 from config import get_settings
 
-logger = logging.getLogger("dokichat.oauth")
+logger = logging.getLogger("ai_companion.oauth")
 
 
 # ── Unified user info ─────────────────────────────────────────

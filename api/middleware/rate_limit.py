@@ -11,11 +11,11 @@ import logging
 from fastapi import Request, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
-logger = logging.getLogger("dokichat.ratelimit")
+logger = logging.getLogger("ai_companion.ratelimit")
 
 CHARGEN_LIMIT = 5
 CHARGEN_WINDOW = 3600
-IS_PRODUCTION = os.getenv("DOKICHAT_ENV", "dev").lower() == "production"
+IS_PRODUCTION = os.getenv("AI_COMPANION_ENV", "dev").lower() == "production"
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

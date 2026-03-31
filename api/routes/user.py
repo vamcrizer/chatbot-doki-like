@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.schemas import UserProfileResponse, UserSettingsRequest
 from api.deps import get_current_user, get_session, get_user_repo
 
-logger = logging.getLogger("dokichat.user")
+logger = logging.getLogger("ai_companion.user")
 router = APIRouter(prefix="/user", tags=["user"])
 
 

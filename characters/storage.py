@@ -10,7 +10,7 @@ Backed by PostgreSQL when DATABASE_URL is set; falls back to in-memory dict.
 import logging
 import unicodedata
 
-logger = logging.getLogger("dokichat.storage.character")
+logger = logging.getLogger("ai_companion.storage.character")
 
 _repo = None
 

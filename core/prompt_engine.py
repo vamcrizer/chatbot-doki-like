@@ -33,7 +33,7 @@ from characters.generator import generate_immersion_anchor as _gen_anchor
 from core.llm_client import chat_complete
 from core.redis_client import cache_get, cache_set
 
-logger = logging.getLogger("dokichat.prompt_engine")
+logger = logging.getLogger("ai_companion.prompt_engine")
 
 
 # ═══════════════════════════════════════════════════════════════

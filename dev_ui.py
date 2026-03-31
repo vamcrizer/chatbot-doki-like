@@ -1,5 +1,5 @@
 """
-DokiChat — Dev Test UI (Streamlit)
+AI Companion — Dev Test UI (Streamlit)
 
 Giao diện test nhanh cho backend API.
 Không dùng trong production.
@@ -18,7 +18,7 @@ API_BASE = "http://localhost:8080"
 TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 
 st.set_page_config(
-    page_title="DokiChat Dev UI",
+    page_title="AI Companion Dev UI",
     page_icon="💬",
     layout="wide",
 )
@@ -195,7 +195,7 @@ with st.sidebar:
 
 
 # ── Main: Chat Interface ───────────────────────────────────────
-st.title("💬 DokiChat Dev UI")
+st.title("💬 AI Companion Dev UI")
 
 if not st.session_state.token:
     st.info("👈 Register or login in the sidebar to start.")

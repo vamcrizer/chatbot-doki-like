@@ -1,5 +1,5 @@
 """
-DokiChat API — FastAPI Application
+AI Companion API — FastAPI Application
 
 Entry point: uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
 """
@@ -23,7 +23,7 @@ logging.basicConfig(
     format="%(asctime)s | %(name)-20s | %(levelname)-5s | %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger("dokichat")
+logger = logging.getLogger("ai_companion")
 
 _settings = get_settings()
 
@@ -34,7 +34,7 @@ _settings = get_settings()
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("=" * 50)
-    logger.info("DokiChat API starting...")
+    logger.info("AI Companion API starting...")
     logger.info("  Model:    %s", _settings.LLM_MODEL)
     logger.info("  LLM URL:  %s", _settings.LLM_BASE_URL)
     logger.info("  Content:  %s", _settings.DEFAULT_CONTENT_MODE)
@@ -76,13 +76,13 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Shutdown flush failed")
 
-    logger.info("DokiChat API shutting down...")
+    logger.info("AI Companion API shutting down...")
 
 
 # ── App ───────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="DokiChat API",
+    title="AI Companion API",
     description="AI Companion Chat — romantic & immersive character interactions",
     version="1.0.0",
     lifespan=lifespan,
@@ -166,7 +166,7 @@ async def health_check():
 @app.get("/")
 async def root():
     return {
-        "app": "DokiChat API",
+        "app": "AI Companion API",
         "version": "1.0.0",
         "docs": "/docs",
     }

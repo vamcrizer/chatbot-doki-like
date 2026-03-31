@@ -1,3 +1,3 @@
 """
-Memory package for DokiChat — Mem0 + Scene Tracker
+Memory package for AI Companion — Mem0 + Scene Tracker
 """

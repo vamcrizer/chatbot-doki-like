@@ -29,7 +29,7 @@ from api.schemas import (
 from core.llm_client import chat_complete
 from services.character_service import CharacterService
 
-logger = logging.getLogger("dokichat.routes.character")
+logger = logging.getLogger("ai_companion.routes.character")
 router = APIRouter(prefix="/character", tags=["character"])
 
 

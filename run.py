@@ -1,5 +1,5 @@
 """
-DokiChat API — Development server entry point.
+AI Companion API — Development server entry point.
 
 Usage:
     python run.py              # default: port 8080, auto-reload
@@ -11,7 +11,7 @@ import uvicorn
 
 
 def main():
-    parser = argparse.ArgumentParser(description="DokiChat API server")
+    parser = argparse.ArgumentParser(description="AI Companion API server")
     parser.add_argument("--port", type=int, default=8080, help="Port (default: 8080)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host (default: 0.0.0.0)")
     parser.add_argument("--prod", action="store_true", help="Production mode (no reload, 4 workers)")

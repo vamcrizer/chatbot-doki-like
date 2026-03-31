@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Optional
 
-logger = logging.getLogger("dokichat.redis")
+logger = logging.getLogger("ai_companion.redis")
 
 _redis_client = None
 _initialized = False

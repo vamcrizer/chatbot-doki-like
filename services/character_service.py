@@ -16,7 +16,7 @@ from characters.generator import (
 )
 from characters.storage import save_character, delete_character
 
-logger = logging.getLogger("dokichat.service.character")
+logger = logging.getLogger("ai_companion.service.character")
 
 BUILTIN_KEYS = {"kael", "seraphine", "ren", "linh_dan", "sol"}
 

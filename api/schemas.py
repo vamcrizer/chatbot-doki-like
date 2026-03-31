@@ -1,5 +1,5 @@
 """
-DokiChat API — Pydantic schemas for request/response models.
+AI Companion API — Pydantic schemas for request/response models.
 
 Character creation follows C.AI-style input fields:
   name, subtitle, description, definition, greetings, tags, gender, visibility

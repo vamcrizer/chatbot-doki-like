@@ -1,4 +1,4 @@
-# DokiChat — AI Companion Platform
+# AI Companion — AI Companion Platform
 
 Nền tảng AI Companion Chat với nhân vật ảo có **tính cách sâu**, **cảm xúc tiến triển**, **trí nhớ dài hạn**, và **mối quan hệ 8 giai đoạn** — mô phỏng trải nghiệm trò chuyện immersive với nhân vật sống động.
 
@@ -128,8 +128,8 @@ brew services start redis
 # Hoặc manual: pg_ctl -D ... start / redis-server
 
 # 3. Create database (nếu dùng PostgreSQL)
-createdb dokichat
-psql dokichat < scripts/migrations/001_init.sql
+createdb ai_companion
+psql ai_companion < scripts/migrations/001_init.sql
 
 # 4. Start LM Studio → load gemma-3-4b-it → Start server (port 1234)
 

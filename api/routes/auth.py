@@ -31,7 +31,7 @@ from api.schemas import (
 )
 from config import get_settings
 
-logger = logging.getLogger("dokichat.auth")
+logger = logging.getLogger("ai_companion.auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -225,7 +225,7 @@ async def oauth_authorize(provider: str, redirect_uri: str):
 
 @router.post("/oauth/{provider}/callback", response_model=TokenResponse)
 async def oauth_callback(provider: str, req: OAuthCallbackRequest):
-    """Exchange authorization code for DokiChat access + refresh tokens.
+    """Exchange authorization code for AI Companion access + refresh tokens.
 
     Called by the client after receiving the code from the provider's redirect.
 

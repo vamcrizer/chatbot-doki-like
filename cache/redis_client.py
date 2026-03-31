@@ -10,7 +10,7 @@ from typing import Optional
 
 from config import get_settings
 
-logger = logging.getLogger("dokichat.cache")
+logger = logging.getLogger("ai_companion.cache")
 
 _settings = get_settings()
 _redis = None

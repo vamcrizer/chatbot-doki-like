@@ -59,7 +59,7 @@ class Settings:
     # Qdrant integration for semantic memory search
     # QDRANT_URL: str = os.environ.get("QDRANT_URL", "localhost")
     # QDRANT_PORT: int = int(os.environ.get("QDRANT_PORT", "6333"))
-    # QDRANT_COLLECTION: str = os.environ.get("QDRANT_COLLECTION", "dokichat_memories")
+    # QDRANT_COLLECTION: str = os.environ.get("QDRANT_COLLECTION", "ai_companion_memories")
     # EMBEDDING_MODEL: str = os.environ.get("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
     # EMBEDDING_DIM: int = int(os.environ.get("EMBEDDING_DIM", "1024"))
 

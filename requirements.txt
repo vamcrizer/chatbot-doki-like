@@ -1,4 +1,4 @@
-# DokiChat — Production Dependencies
+# AI Companion — Production Dependencies
 # ═══════════════════════════════════════════════════════════
 
 # ── Core API ──────────────────────────────────────────────
