@@ -2,29 +2,30 @@
 Chat routes — SSE streaming with sliding window.
 
 Flow:
-  1. Rate limit check (Redis ZSET)
-  2. Safety check input
-  3. Load session from Redis
-  4. Build prompt (system + conversation window)
-  5. Stream LLM response via SSE
-  6. Post-process (POV fix)
-  7. Save session to Redis (resets 30-min TTL)
-  8. Enqueue messages for DB persistence (write-behind buffer)
-  9. Background: update affection state (async, may call LLM)
+  1. JWT auth  — user_id extracted from Bearer token (NOT from request body)
+  2. Rate limit check (Redis ZSET)
+  3. Safety check input
+  4. Load session from Redis
+  5. Build prompt (system + conversation window)
+  6. Stream LLM response via SSE
+  7. Post-process (POV fix)
+  8. Save session to Redis (resets 30-min TTL)
+  9. Enqueue messages for DB persistence (write-behind buffer)
+  10. Background: update affection state (async, may call LLM)
 
 # TODO: Memory context (Qdrant semantic recall)
 """
 import asyncio
 import json
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from api.schemas import (
     ChatRequest, ChatHistoryResponse, ChatMessage, SessionState,
     RegenerateRequest, GreetingResponse,
 )
-from api.deps import get_session, save_session, destroy_session
+from api.deps import get_current_user, get_session, save_session, destroy_session
 from characters import get_all_characters
 from core.llm_client import chat_stream
 from core.prompt_engine import build_messages_full
@@ -66,16 +67,24 @@ async def _update_affection_bg(session, user_msg: str, assistant_msg: str, char_
 # ── Routes ────────────────────────────────────────────────────
 
 @router.post("/stream")
-async def chat_stream_endpoint(req: ChatRequest):
+async def chat_stream_endpoint(
+    req: ChatRequest,
+    current_user: str = Depends(get_current_user),
+):
     """Stream chat response via Server-Sent Events.
+
+    Requires: Authorization: Bearer <access_token>
+    user_id is derived from JWT — the body field is ignored.
 
     Events:
       - type=token: {"t": "chunk text"}
-      - type=done: {"full": "complete response", "turn": N}
+      - type=done:  {"full": "complete response", "turn": N}
       - type=error: {"error": "message"}
     """
+    user_id = current_user  # authoritative — from JWT
+
     # Rate limit check (Redis ZSET sliding window)
-    if not check_rate_limit(req.user_id):
+    if not check_rate_limit(user_id):
         raise HTTPException(429, "Too many requests. Please wait a moment.")
 
     # Validate character exists
@@ -96,7 +105,7 @@ async def chat_stream_endpoint(req: ChatRequest):
         )
 
     # Load session from Redis
-    session = get_session(req.user_id, req.character_id)
+    session = get_session(user_id, req.character_id)
     session.user_name = req.user_name
     conv = session.conversation
     aff = session.affection
@@ -140,8 +149,8 @@ async def chat_stream_endpoint(req: ChatRequest):
             save_session(session)
 
             # Enqueue for DB persistence (non-blocking, flushed every 30s)
-            db_enqueue(req.user_id, req.character_id, "user", req.message, conv.total_turns)
-            db_enqueue(req.user_id, req.character_id, "assistant", processed, conv.total_turns)
+            db_enqueue(user_id, req.character_id, "user", req.message, conv.total_turns)
+            db_enqueue(user_id, req.character_id, "assistant", processed, conv.total_turns)
 
             # Background: affection update (async — may call LLM)
             asyncio.create_task(_update_affection_bg(
@@ -168,10 +177,13 @@ async def chat_stream_endpoint(req: ChatRequest):
     return EventSourceResponse(event_generator())
 
 
-@router.get("/history/{user_id}/{character_id}", response_model=ChatHistoryResponse)
-async def get_chat_history(user_id: str, character_id: str):
-    """Get conversation history for a user-character pair."""
-    session = get_session(user_id, character_id)
+@router.get("/history/{character_id}", response_model=ChatHistoryResponse)
+async def get_chat_history(
+    character_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Get conversation history for the authenticated user with a character."""
+    session = get_session(current_user, character_id)
     messages = [
         ChatMessage(role=m["role"], content=m["content"])
         for m in session.conversation.history
@@ -183,13 +195,16 @@ async def get_chat_history(user_id: str, character_id: str):
     )
 
 
-@router.get("/state/{user_id}/{character_id}", response_model=SessionState)
-async def get_session_state(user_id: str, character_id: str):
-    """Get current session state."""
-    session = get_session(user_id, character_id)
+@router.get("/state/{character_id}", response_model=SessionState)
+async def get_session_state(
+    character_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Get current session state for the authenticated user."""
+    session = get_session(current_user, character_id)
     aff = session.affection
     return SessionState(
-        user_id=user_id,
+        user_id=current_user,
         character_id=character_id,
         total_turns=session.conversation.total_turns,
         emotion="neutral",
@@ -199,21 +214,32 @@ async def get_session_state(user_id: str, character_id: str):
     )
 
 
-@router.post("/reset/{user_id}/{character_id}")
-async def reset_conversation(user_id: str, character_id: str):
-    """Reset conversation history."""
-    destroy_session(user_id, character_id)
+@router.post("/reset/{character_id}")
+async def reset_conversation(
+    character_id: str,
+    current_user: str = Depends(get_current_user),
+):
+    """Reset conversation history for the authenticated user."""
+    destroy_session(current_user, character_id)
     return {"status": "ok", "message": "Conversation reset"}
 
 
 @router.post("/regenerate")
-async def regenerate_response(req: RegenerateRequest):
-    """Regenerate the last assistant response with variation."""
+async def regenerate_response(
+    req: RegenerateRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Regenerate the last assistant response with variation.
+
+    Requires: Authorization: Bearer <access_token>
+    """
+    user_id = current_user  # authoritative — from JWT
+
     all_chars = get_all_characters()
     if req.character_id not in all_chars:
         raise HTTPException(404, f"Character '{req.character_id}' not found")
 
-    session = get_session(req.user_id, req.character_id)
+    session = get_session(user_id, req.character_id)
     conv = session.conversation
 
     if conv.total_turns < 1:
@@ -269,7 +295,7 @@ async def regenerate_response(req: RegenerateRequest):
             save_session(session)
 
             # Enqueue regenerated response for DB persistence
-            db_enqueue(req.user_id, req.character_id, "assistant", processed, conv.total_turns)
+            db_enqueue(user_id, req.character_id, "assistant", processed, conv.total_turns)
 
             yield {
                 "event": "done",
@@ -294,7 +320,10 @@ async def regenerate_response(req: RegenerateRequest):
 
 @router.get("/greeting/{character_id}", response_model=GreetingResponse)
 async def get_greeting(character_id: str, user_name: str = "bạn"):
-    """Get a random greeting from the character's greeting pool."""
+    """Get a random greeting from the character's greeting pool.
+
+    Public endpoint — no auth required.
+    """
     import random
 
     all_chars = get_all_characters()

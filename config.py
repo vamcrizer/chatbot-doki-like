@@ -35,6 +35,23 @@ class Settings:
     DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
     REDIS_URL: str = os.environ.get("REDIS_URL", "")  # TODO: session + chat window storage
 
+    # ── Auth (JWT) ────────────────────────────────────────────
+    JWT_SECRET_KEY: str = os.environ.get("JWT_SECRET_KEY", "change-me-in-production-use-long-random-secret")
+    JWT_ACCESS_EXPIRE_MINUTES: int = int(os.environ.get("JWT_ACCESS_EXPIRE_MINUTES", "30"))
+    JWT_REFRESH_EXPIRE_DAYS: int = int(os.environ.get("JWT_REFRESH_EXPIRE_DAYS", "7"))
+
+    # ── OAuth — Google ────────────────────────────────────────
+    GOOGLE_CLIENT_ID: str = os.environ.get("GOOGLE_CLIENT_ID", "")
+    GOOGLE_CLIENT_SECRET: str = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+
+    # ── OAuth — Apple ─────────────────────────────────────────
+    # APPLE_CLIENT_ID: Service ID (e.g. com.yourapp.signin), NOT the App ID
+    # APPLE_PRIVATE_KEY: contents of .p8 file; use \\n for newlines in env vars
+    APPLE_CLIENT_ID: str = os.environ.get("APPLE_CLIENT_ID", "")
+    APPLE_TEAM_ID: str = os.environ.get("APPLE_TEAM_ID", "")
+    APPLE_KEY_ID: str = os.environ.get("APPLE_KEY_ID", "")
+    APPLE_PRIVATE_KEY: str = os.environ.get("APPLE_PRIVATE_KEY", "")
+
     # ── Content ───────────────────────────────────────────────
     DEFAULT_CONTENT_MODE: str = os.environ.get("DEFAULT_CONTENT_MODE", "romantic")
 

@@ -8,7 +8,7 @@ Tags drive content_mode automatically:
   tags contain "18+"|"nsfw"|"explicit" → explicit mode
   otherwise → romantic (companion, fade-to-black)
 """
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, EmailStr
 from typing import Optional
 
 
@@ -27,14 +27,71 @@ def detect_content_mode(tags: list[str]) -> str:
     return "romantic"
 
 
+# ── Auth ──────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    """Request body for POST /auth/register"""
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    display_name: str = Field(default="", max_length=50)
+
+
+class LoginRequest(BaseModel):
+    """Request body for POST /auth/login"""
+    email: EmailStr
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class TokenResponse(BaseModel):
+    """Response for /auth/register and /auth/login"""
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user_id: str
+    display_name: str
+
+
+class RefreshRequest(BaseModel):
+    """Request body for POST /auth/refresh and POST /auth/logout"""
+    refresh_token: str
+
+
+class OAuthAuthorizeResponse(BaseModel):
+    """Response for GET /auth/oauth/{provider} — redirect the user here."""
+    authorization_url: str
+    state: str
+    provider: str
+
+
+class OAuthCallbackRequest(BaseModel):
+    """Request body for POST /auth/oauth/{provider}/callback.
+
+    The client exchanges the code it received from the provider's redirect.
+
+    Fields:
+      code          — authorization code from provider
+      redirect_uri  — must exactly match what was used in the authorization URL
+      state         — state value received from provider (for CSRF check)
+      name          — display name (Apple only: sent on FIRST login in form_post)
+    """
+    code: str
+    redirect_uri: str
+    state: str = ""
+    name: Optional[str] = None
+
+
 # ── Chat ──────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    """Request body for /chat/stream"""
-    user_id: str = Field(..., description="Unique user identifier")
+    """Request body for /chat/stream.
+
+    user_id is no longer required — derived from JWT on protected endpoints.
+    Kept as Optional for backward compatibility.
+    """
     character_id: str = Field(..., description="Character ID")
     message: str = Field(..., min_length=1, max_length=2000, description="User message")
     user_name: str = Field(default="bạn", max_length=50, description="User display name")
+    user_id: Optional[str] = Field(default=None, description="Deprecated: use JWT auth instead")
 
 
 class ChatMessage(BaseModel):
@@ -276,10 +333,13 @@ class HealthResponse(BaseModel):
 # ── Regenerate ────────────────────────────────────────────────
 
 class RegenerateRequest(BaseModel):
-    """Request body for /chat/regenerate"""
-    user_id: str = Field(..., description="Unique user identifier")
+    """Request body for /chat/regenerate.
+
+    user_id is no longer required — derived from JWT on protected endpoints.
+    """
     character_id: str = Field(..., description="Character ID")
     user_name: str = Field(default="bạn", max_length=50, description="User display name")
+    user_id: Optional[str] = Field(default=None, description="Deprecated: use JWT auth instead")
 
 
 # ── Greeting ──────────────────────────────────────────────────
