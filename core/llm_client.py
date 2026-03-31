@@ -9,10 +9,13 @@ Provides:
   - chat_stream() — streaming generator for chat responses
   - chat_complete() — single completion (for extraction/analysis tasks)
 """
+import logging
 from typing import Generator
 from openai import OpenAI
 
 from config import get_settings
+
+logger = logging.getLogger("dokichat.llm")
 
 _settings = get_settings()
 
@@ -51,7 +54,7 @@ def chat_stream(
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
     except Exception as e:
-        print(f"[LLM] Stream error: {e}")
+        logger.error("LLM stream error: %s", e)
         yield f"*[Connection error: {e}]*"
 
 
@@ -78,5 +81,5 @@ def chat_complete(
         )
         return response.choices[0].message.content or ""
     except Exception as e:
-        print(f"[LLM] Complete error: {e}")
+        logger.error("LLM complete error: %s", e)
         return ""

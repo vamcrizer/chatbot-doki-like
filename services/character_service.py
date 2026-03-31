@@ -115,7 +115,8 @@ class CharacterService:
                system_prompt: str, opening_scene: str = "",
                greetings_alt: list[str] | None = None,
                content_mode: str = "romantic",
-               pacing: str = "guarded") -> dict:
+               pacing: str = "guarded",
+               user_id: str | None = None) -> dict:
         """Save a complete character. User provides all fields.
 
         Returns:
@@ -135,8 +136,8 @@ class CharacterService:
         # Generate emotional states
         emo_states = generate_emotional_states(self._llm, bio, name)
 
-        key = save_character(char_data, emo_states)
-        logger.info(f"Created character '{key}' ({len(system_prompt)} chars)")
+        key = save_character(char_data, emo_states, creator_id=user_id)
+        logger.info("Created character '%s' (%d chars)", key, len(system_prompt))
 
         return {
             "key": key,

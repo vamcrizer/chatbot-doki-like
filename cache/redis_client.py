@@ -32,10 +32,10 @@ def get_redis():
         import redis
         _redis = redis.from_url(redis_url, decode_responses=True)
         _redis.ping()
-        logger.info(f"✅ Redis connected: {redis_url[:30]}...")
+        logger.info("Redis connected: %s...", redis_url[:30])
         return _redis
     except Exception as e:
-        logger.warning(f"⚠️ Redis connection failed: {e} — using in-memory")
+        logger.warning("Redis connection failed: %s — using in-memory", e)
         return None
 
 

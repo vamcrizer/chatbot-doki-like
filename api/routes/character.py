@@ -88,7 +88,7 @@ async def generate_prompt(req: GeneratePromptRequest):
             **result,
         )
     except Exception as e:
-        logger.error(f"Prompt generation failed: {e}")
+        logger.error("Prompt generation failed: %s", e)
         raise HTTPException(500, f"Generation failed: {e}")
 
 
@@ -108,7 +108,7 @@ async def generate_greeting(req: GenerateGreetingRequest):
             word_count=len(greeting.split()),
         )
     except Exception as e:
-        logger.error(f"Greeting generation failed: {e}")
+        logger.error("Greeting generation failed: %s", e)
         raise HTTPException(500, f"Generation failed: {e}")
 
 
@@ -137,6 +137,7 @@ async def create_character(
             greetings_alt=req.greetings_alt,
             content_mode=req.content_mode,
             pacing=req.pacing,
+            user_id=current_user,
         )
         logger.info("Character created by user %s: %s", current_user, result["key"])
         return CharacterCreateResponse(
@@ -147,7 +148,7 @@ async def create_character(
             greetings_count=1 + len(req.greetings_alt),
         )
     except Exception as e:
-        logger.error(f"Character creation failed: {e}")
+        logger.error("Character creation failed: %s", e)
         raise HTTPException(500, f"Creation failed: {e}")
 
 

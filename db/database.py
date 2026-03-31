@@ -39,10 +39,10 @@ def get_engine():
             pool_pre_ping=True,
             echo=False,
         )
-        logger.info(f"Database connected: {db_url[:30]}...")
+        logger.info("Database connected: %s...", db_url[:30])
         return _engine
     except Exception as e:
-        logger.error(f"Database connection failed: {e}")
+        logger.error("Database connection failed: %s", e)
         return None
 
 

@@ -130,4 +130,4 @@ class ChatService:
                     character_name=char_name,
                 )
         except Exception as e:
-            logger.warning(f"Affection update error: {e}")
+            logger.warning("Affection update error: %s", e)

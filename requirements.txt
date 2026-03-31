@@ -30,3 +30,7 @@ python-multipart>=0.0.9
 
 # ── Utilities ────────────────────────────────────────────
 tiktoken>=0.7.0
+langdetect>=1.0.9
+
+# ── Database Driver (sync PostgreSQL) ────────────────────
+psycopg2-binary>=2.9.9

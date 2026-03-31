@@ -386,11 +386,11 @@ def generate_system_prompt(llm_call_fn, bio: str, name: str,
     section_keys = list(FILL_PROMPTS.keys())
 
     sections = {}
-    logger.info(f"Generating {len(section_keys)} sections in parallel...")
+    logger.info("Generating %d sections in parallel...", len(section_keys))
 
     def _gen(key):
         result = _generate_section(llm_call_fn, key, bio, content_mode=content_mode)
-        logger.info(f"  ✓ [{key}] done ({len(result)} chars)")
+        logger.info("  [%s] done (%d chars)", key, len(result))
         return key, result
 
     with ThreadPoolExecutor(max_workers=len(section_keys)) as executor:

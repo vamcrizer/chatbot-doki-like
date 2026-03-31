@@ -1,48 +1,32 @@
 """
-Character Storage — JSON file I/O for custom characters.
+Character Storage — PostgreSQL-backed custom character I/O.
 
-Handles saving, loading, and deleting UGC characters from the
-custom_characters/ directory.
+Provides the public interface used by CharacterService:
+  save_character(), load_custom_characters(), load_custom_emotional_states(),
+  delete_character()
+
+Backed by PostgreSQL when DATABASE_URL is set; falls back to in-memory dict.
 """
-import os
-import json
+import logging
 import unicodedata
-from datetime import datetime
 
-from config import CUSTOM_CHARACTERS_DIR
+logger = logging.getLogger("dokichat.storage.character")
 
-CUSTOM_DIR = str(CUSTOM_CHARACTERS_DIR)
-
-# ── Performance: In-memory LRU-like Cache ───────────────────
-_cache_mtime: float = 0.0
-_characters_cache: dict = {}
-_states_cache: dict = {}
-
-def _get_folder_mtime() -> float:
-    """Get max modification time of custom_characters folder and its files."""
-    if not os.path.exists(CUSTOM_DIR):
-        return 0.0
-    return max(
-        (os.path.getmtime(os.path.join(CUSTOM_DIR, f)) 
-         for f in os.listdir(CUSTOM_DIR) if f.endswith(".json")),
-        default=os.path.getmtime(CUSTOM_DIR)
-    )
+_repo = None
 
 
-def _parse_llm_json(raw: str) -> dict:
-    """Parse JSON from LLM response, stripping markdown code blocks if present."""
-    raw = raw.strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1]
-        if raw.endswith("```"):
-            raw = raw[:-3]
-        elif "```" in raw:
-            raw = raw[:raw.rfind("```")]
-    return json.loads(raw.strip())
+def _get_repo():
+    global _repo
+    if _repo is not None:
+        return _repo
+    from db.database import get_session_factory
+    from db.repositories.character_repo import CharacterRepository
+    _repo = CharacterRepository(get_session_factory())
+    return _repo
 
 
 def _safe_filename(name: str) -> str:
-    """Convert character name to filesystem-safe key."""
+    """Convert character name to a filesystem/URL-safe slug."""
     safe = name.lower().replace(" ", "_")
     safe = unicodedata.normalize("NFD", safe)
     safe = "".join(c for c in safe if not unicodedata.combining(c))
@@ -50,62 +34,76 @@ def _safe_filename(name: str) -> str:
     return safe
 
 
-def save_character(character_data: dict, emotional_states: dict) -> str:
-    """Save a character to JSON file.
+def save_character(
+    character_data: dict,
+    emotional_states: dict,
+    creator_id: str | None = None,
+) -> str:
+    """Save a custom character to the database.
+
+    If a character with the same key already exists, it is overwritten.
 
     Args:
         character_data: Dict with name, system_prompt, opening_scene, etc.
         emotional_states: Dict of emotional state instructions.
+        creator_id: User ID of the creator (for attribution).
 
     Returns:
-        The character key (safe filename).
+        The character key (slug derived from name).
     """
-    os.makedirs(CUSTOM_DIR, exist_ok=True)
-
     name = character_data.get("name", "unknown")
     key = _safe_filename(name)
-    filepath = os.path.join(CUSTOM_DIR, f"{key}.json")
+
+    repo = _get_repo()
+    existing = repo.find_by_key(key)
 
     data = {
-        "character": character_data,
+        "key": key,
+        "creator_id": creator_id,
+        "name": name,
+        "gender": character_data.get("gender", "female"),
+        "system_prompt": character_data.get("system_prompt", ""),
+        "greeting": character_data.get("opening_scene", ""),
+        "greetings_alt": character_data.get("greetings_alt", []),
+        "pacing": character_data.get("pacing", "guarded"),
+        "content_mode": character_data.get("content_mode", "romantic"),
+        "bio_original": character_data.get("_bio", ""),
         "emotional_states": emotional_states,
-        "created_at": datetime.now().isoformat(),
-        "bio": character_data.get("_bio", ""),
     }
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    if existing:
+        repo.update(existing["id"], data)
+        logger.info("Updated character '%s' in database", key)
+    else:
+        repo.create(data)
+        logger.info("Saved character '%s' to database", key)
 
     return key
 
 
 def load_custom_characters() -> dict:
-    """Load all custom characters from JSON files, with fast mtime caching."""
-    global _cache_mtime, _characters_cache
+    """Load all custom characters from the database.
 
-    current_mtime = _get_folder_mtime()
-    if current_mtime > 0 and current_mtime == _cache_mtime and _characters_cache:
-        return _characters_cache
-
-    characters = {}
-    if not os.path.exists(CUSTOM_DIR):
-        return characters
-
-    for filename in os.listdir(CUSTOM_DIR):
-        if not filename.endswith(".json"):
+    Returns:
+        Dict[key, character_dict] compatible with the characters package format.
+    """
+    repo = _get_repo()
+    result = {}
+    for char in repo.get_all():
+        key = char.get("key", "")
+        if not key:
             continue
-        filepath = os.path.join(CUSTOM_DIR, filename)
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            key = filename[:-5]
-            characters[key] = data["character"]
-        except (json.JSONDecodeError, KeyError) as e:
-            print(f"Warning: Could not load {filename}: {e}")
-
-    _characters_cache = characters
-    _cache_mtime = current_mtime
-    return characters
+        result[key] = {
+            "name": char["name"],
+            "gender": char["gender"],
+            "system_prompt": char["system_prompt"],
+            "opening_scene": char["greeting"],
+            "greetings_alt": char["greetings_alt"],
+            "pacing": char["pacing"],
+            "content_mode": char["content_mode"],
+            "_bio": char["bio_original"],
+        }
+    return result
 
 
 def load_custom_emotional_states() -> dict:
@@ -114,33 +112,22 @@ def load_custom_emotional_states() -> dict:
     Returns:
         Dict[key, emotional_states_dict]
     """
-    states = {}
-    if not os.path.exists(CUSTOM_DIR):
-        return states
-
-    for filename in os.listdir(CUSTOM_DIR):
-        if not filename.endswith(".json"):
-            continue
-        filepath = os.path.join(CUSTOM_DIR, filename)
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            key = filename[:-5]
-            states[key] = data.get("emotional_states", {})
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-    return states
+    repo = _get_repo()
+    return {
+        char["key"]: char["emotional_states"]
+        for char in repo.get_all()
+        if char.get("key")
+    }
 
 
 def delete_character(key: str) -> bool:
-    """Delete a custom character JSON file.
+    """Delete a custom character from the database.
 
     Returns:
         True if deleted, False if not found.
     """
-    filepath = os.path.join(CUSTOM_DIR, f"{key}.json")
-    if os.path.exists(filepath):
-        os.remove(filepath)
-        return True
-    return False
+    repo = _get_repo()
+    deleted = repo.delete_by_key(key)
+    if deleted:
+        logger.info("Deleted character '%s' from database", key)
+    return deleted

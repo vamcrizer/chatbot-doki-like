@@ -45,12 +45,12 @@ def check_rate_limit(user_id: str) -> bool:
         request_count = results[2]  # ZCARD result
 
         if request_count > MAX_REQUESTS_PER_MINUTE:
-            logger.warning(f"Rate limited user {user_id}: {request_count} req/min")
+            logger.warning("Rate limited user %s: %d req/min", user_id, request_count)
             return False
 
         return True
 
     except Exception as e:
-        logger.warning(f"Rate limit check error: {e}")
+        logger.warning("Rate limit check error: %s", e)
         # Fail-open on Redis errors
         return True

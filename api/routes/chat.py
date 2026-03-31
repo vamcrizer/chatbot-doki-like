@@ -59,9 +59,9 @@ async def _update_affection_bg(session, user_msg: str, assistant_msg: str, char_
                 character_name=char_name,
             )
             save_session(session)
-            logger.debug(f"Affection updated: {session.affection.score}")
+            logger.debug("Affection updated: %s", session.affection.relationship_score)
     except Exception as e:
-        logger.warning(f"Background affection update error: {e}")
+        logger.warning("Background affection update error: %s", e)
 
 
 # ── Routes ────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ async def chat_stream_endpoint(
             detail={
                 "error": "content_blocked",
                 "reason": safety.reason,
-                "message": safety.user_message,
+                "message": safety.replacement,
             }
         )
 
@@ -163,12 +163,13 @@ async def chat_stream_endpoint(
                     "full": processed,
                     "turn": conv.total_turns,
                     "emotion": "neutral",
-                    "affection": session.affection.score if hasattr(session.affection, 'score') else 0,
+                    "affection": session.affection.relationship_score if hasattr(session.affection, 'relationship_score') else 0,
+                    "stage": session.affection.relationship_label if hasattr(session.affection, 'relationship_label') else "stranger",
                 }, ensure_ascii=False),
             }
 
         except Exception as e:
-            logger.error(f"Stream error: {e}")
+            logger.error("Stream error: %s", e)
             yield {
                 "event": "error",
                 "data": json.dumps({"error": str(e)}),
@@ -208,9 +209,9 @@ async def get_session_state(
         character_id=character_id,
         total_turns=session.conversation.total_turns,
         emotion="neutral",
-        affection_score=aff.score if hasattr(aff, 'score') else 0,
-        affection_stage=aff.stage if hasattr(aff, 'stage') else "stranger",
-        scene=session.scene.current if hasattr(session.scene, 'current') else "",
+        affection_score=aff.relationship_score if hasattr(aff, 'relationship_score') else 0,
+        affection_stage=aff.relationship_label if hasattr(aff, 'relationship_label') else "stranger",
+        scene=session.scene.current_scene if hasattr(session.scene, 'current_scene') else "",
     )
 
 
@@ -307,7 +308,7 @@ async def regenerate_response(
             }
 
         except Exception as e:
-            logger.error(f"Regenerate stream error: {e}")
+            logger.error("Regenerate stream error: %s", e)
             conv.add_assistant(old_response)
             save_session(session)
             yield {

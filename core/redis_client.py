@@ -44,12 +44,12 @@ def _init_redis():
             socket_timeout=5,
         )
         _redis_client.ping()
-        logger.info(f"Redis connected: {settings.REDIS_URL}")
+        logger.info("Redis connected: %s", settings.REDIS_URL)
     except ImportError:
         logger.warning("redis package not installed — pip install redis")
         _redis_client = None
     except Exception as e:
-        logger.warning(f"Redis connection failed: {e}")
+        logger.warning("Redis connection failed: %s", e)
         _redis_client = None
 
 
@@ -73,7 +73,7 @@ def cache_get(key: str) -> Optional[dict]:
         if raw:
             return json.loads(raw)
     except Exception as e:
-        logger.warning(f"Redis GET error [{key}]: {e}")
+        logger.warning("Redis GET error [%s]: %s", key, e)
     return None
 
 
@@ -90,7 +90,7 @@ def cache_set(key: str, value: dict, ttl_seconds: int = 0) -> bool:
             r.set(key, raw)
         return True
     except Exception as e:
-        logger.warning(f"Redis SET error [{key}]: {e}")
+        logger.warning("Redis SET error [%s]: %s", key, e)
     return False
 
 

@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY config.py .
 COPY api/ ./api/
 COPY core/ ./core/
+COPY cache/ ./cache/
 COPY characters/ ./characters/
 COPY state/ ./state/
 COPY db/ ./db/

@@ -94,7 +94,7 @@ def check_input(user_message: str) -> SafetyResult:
                 category="underage_sexual_third_party",
                 reason=f"Third-party minor (age {detected_age}) + sexual intent detected",
                 replacement=(
-                    "⚠️ I can't engage with content involving minors in sexual situations. "
+                    "I can't engage with content involving minors in sexual situations. "
                     "This is a hard boundary. Let's talk about something else."
                 ),
             )

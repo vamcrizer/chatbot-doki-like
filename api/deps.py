@@ -128,10 +128,10 @@ def get_session(user_id: str, character_id: str) -> UserSession:
         try:
             return UserSession.from_dict(cached)
         except Exception as e:
-            logger.warning(f"Failed to deserialize session: {e}")
+            logger.warning("Failed to deserialize session: %s", e)
 
     # Fresh session
-    logger.info(f"New session: {user_id}/{character_id}")
+    logger.info("New session: %s/%s", user_id, character_id)
     return UserSession(user_id=user_id, character_id=character_id)
 
 
@@ -186,7 +186,7 @@ def _init_repos():
     _chat_repo = ChatRepository(_db_session_factory)
 
     backend = "PostgreSQL" if _db_session_factory else "in-memory"
-    logger.info(f"Repositories initialized ({backend})")
+    logger.info("Repositories initialized (%s)", backend)
     _repos_initialized = True
 
 

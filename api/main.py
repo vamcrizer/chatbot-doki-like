@@ -5,6 +5,7 @@ Entry point: uvicorn api.main:app --host 0.0.0.0 --port 8080 --reload
 """
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -34,9 +35,9 @@ async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("=" * 50)
     logger.info("DokiChat API starting...")
-    logger.info(f"  Model:    {_settings.LLM_MODEL}")
-    logger.info(f"  LLM URL:  {_settings.LLM_BASE_URL}")
-    logger.info(f"  Content:  {_settings.DEFAULT_CONTENT_MODE}")
+    logger.info("  Model:    %s", _settings.LLM_MODEL)
+    logger.info("  LLM URL:  %s", _settings.LLM_BASE_URL)
+    logger.info("  Content:  %s", _settings.DEFAULT_CONTENT_MODE)
     logger.info("=" * 50)
 
     # Health check LLM
@@ -46,11 +47,11 @@ async def lifespan(app: FastAPI):
             temperature=0, max_tokens=5,
         )
         if test:
-            logger.info(f"✅ LLM connected: {_settings.LLM_MODEL}")
+            logger.info("LLM connected: %s", _settings.LLM_MODEL)
         else:
-            logger.warning("⚠️ LLM responded empty — check model")
+            logger.warning("LLM responded empty — check model")
     except Exception as e:
-        logger.warning(f"⚠️ LLM not reachable: {e}")
+        logger.warning("LLM not reachable: %s", e)
 
     # Start background workers
     flush_task = asyncio.create_task(_db_flush_loop())
@@ -88,9 +89,15 @@ app = FastAPI(
 )
 
 # Middleware
+_CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: restrict in production
+    allow_origins=_CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

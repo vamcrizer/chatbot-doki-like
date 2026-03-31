@@ -32,8 +32,8 @@ async def get_user_profile(
         character_id=character_id,
         memories=[],     # TODO: Qdrant memory recall
         summary=None,    # TODO: session summary
-        affection_score=aff.score if hasattr(aff, "score") else 0,
-        affection_stage=aff.stage if hasattr(aff, "stage") else "stranger",
+        affection_score=aff.relationship_score if hasattr(aff, "relationship_score") else 0,
+        affection_stage=aff.relationship_label if hasattr(aff, "relationship_label") else "stranger",
         total_turns=session.conversation.total_turns,
     )
 

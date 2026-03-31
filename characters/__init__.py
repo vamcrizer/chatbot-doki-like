@@ -1,18 +1,12 @@
 """Characters package — hardcoded + dynamically loaded custom characters."""
-from characters.kael import KAEL
-from characters.seraphine import SERAPHINE
-from characters.ren import REN
-from characters.linh_dan import LINH_DAN
 from characters.sol import SOL
+from characters.mei import MEI
 from characters.storage import load_custom_characters
 
 # Hardcoded characters
 CHARACTERS = {
-    "kael": KAEL,
-    "seraphine": SERAPHINE,
-    "ren": REN,
-    "linh_dan": LINH_DAN,
     "sol": SOL,
+    "mei": MEI,
 }
 
 

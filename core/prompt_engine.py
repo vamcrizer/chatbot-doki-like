@@ -1,30 +1,45 @@
 """
-Prompt Engine — Builds the full message list for LLM chat.
+Prompt Engine — Assembles the full LLM message list per chat turn.
 
-Layers:
-  1. Character system prompt (from character card)
-  2. Affection state (mood, desire, relationship stage)
-  3. Scene context (current scene state)
-  4. Format enforcement (universal rules)
+Architecture:
+    System prompt is built by stacking 5 layers onto the character's base prompt.
+    Immersion anchors (few-shot priming) are injected as fake history to lock
+    the model's language and narrative voice.
 
-Immersion anchor (few-shot priming):
-  - Builtin characters: hardcoded in character file
-  - UGC characters: auto-generated on first chat, cached GLOBALLY per character+lang
+Layers (appended to system prompt in order):
+    1. Character system prompt  — from character card (V3.2.3 format)
+    2. Affection state          — [CHARACTER INTERNAL STATE] block
+    3. Memory context           — Qdrant semantic recall (TODO)
+    4. Scene context            — [CURRENT SCENE] block
+    5. Format enforcement       — universal dialogue/narration rules
+    6. Language enforcement      — when user language ≠ English
+
+Language Anchoring Strategy (3-tier):
+    Tier 1: LANGUAGE_ENFORCEMENT injected into system prompt — hard rule
+    Tier 2: Immersion anchor — 100-150 word few-shot example in target language
+    Tier 3: Final [REMINDER] system message — exploits recency bias
+
+Immersion Anchor Lifecycle:
+    - Generated via characters.generator.generate_immersion_anchor()
+    - Cached in Redis per character + language: "immersion:{key}:{lang}"
+    - Shared across ALL users and server instances (zero server memory)
+    - Builtin characters may have hardcoded anchors for their default language
+    - Language switch mid-session → different anchor loaded from Redis
 """
 import logging
+
 from characters import get_all_characters
+from characters.generator import generate_immersion_anchor as _gen_anchor
 from core.llm_client import chat_complete
+from core.redis_client import cache_get, cache_set
 
 logger = logging.getLogger("dokichat.prompt_engine")
 
 
-# Immersion cache lives in Redis.
-# Key pattern: "immersion:{character_key}:{lang_code}"
-# Shared across ALL server instances — zero server-side memory.
-from core.redis_client import cache_get, cache_set
+# ═══════════════════════════════════════════════════════════════
+# CONSTANTS
+# ═══════════════════════════════════════════════════════════════
 
-
-# ── Universal format enforcement ─────────────────────────────
 FORMAT_ENFORCEMENT = """\
 
 [ADDITIONAL RULES]
@@ -40,176 +55,178 @@ FORMAT_ENFORCEMENT = """\
 4. NEVER ignore the action. Desire vs external reaction should CONTRADICT.
 """
 
+LANGUAGE_ENFORCEMENT = """\
 
-# ── Immersion anchor generation ──────────────────────────────
+[LANGUAGE — ABSOLUTE RULE]
+□ The user is speaking {lang_name}. You MUST respond 100% in {lang_name}.
+□ ALL dialogue, ALL narration, ALL actions — everything in {lang_name}.
+□ This includes *action blocks*, internal thoughts, and sensory descriptions.
+□ Do NOT carry over any language from previous messages. ONLY use {lang_name}.
+□ If you write even ONE word in the wrong language, you have FAILED the task.
+"""
 
-IMMERSION_GEN_TEMPLATE = """\
-You are {char_name}. Write a short scene (2-4 sentences) in {language} \
-where you observe something mundane and reveal your personality through it.
+LANGUAGE_REMINDER = "[REMINDER] Respond ENTIRELY in {lang_name}. Zero words from other languages. Match the user's current language exactly. Stay in character."
 
-Requirements:
-- 100% in {language}. ZERO English words.
-- Show character voice, not just describe a scene.
-- Include one sensory detail and one emotional micro-reaction.
-- Keep it under 80 words.
-
-Example style (English): "Moving day reveals truth. Every box is a secret carried in daylight. \
-She watches from the kitchen window, fingers curling around a cold mug, \
-and wonders if this one will stay."
-
-Now write YOUR version as {char_name}, entirely in {language}."""
-
-
-# Language code → display name mapping
-_LANG_NAMES = {
-    "en": "English", "es": "Spanish", "vi": "Vietnamese",
-    "pt": "Portuguese", "id": "Indonesian", "de": "German",
-    "fr": "French", "hi": "Hindi", "tl": "Filipino",
-    "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
-    "th": "Thai", "ru": "Russian", "ar": "Arabic",
-    "it": "Italian", "nl": "Dutch", "tr": "Turkish",
+LANG_NAMES = {
+    "en": "English",  "vi": "Vietnamese", "ja": "Japanese",
+    "ko": "Korean",   "zh": "Chinese",    "th": "Thai",
+    "ar": "Arabic",   "hi": "Hindi",      "es": "Spanish",
+    "pt": "Portuguese","id": "Indonesian", "de": "German",
+    "fr": "French",   "ru": "Russian",    "it": "Italian",
+    "nl": "Dutch",    "tr": "Turkish",    "tl": "Filipino",
 }
 
 
-def detect_language(text: str) -> str:
-    """Simple language detection from user message.
+# ═══════════════════════════════════════════════════════════════
+# LANGUAGE DETECTION
+# ═══════════════════════════════════════════════════════════════
 
-    Returns ISO 639-1 code. Falls back to 'en'.
-    Uses character-range heuristics for speed (no external lib).
+def detect_language(text: str) -> str:
+    """Detect language from user message using langdetect library.
+
+    Returns ISO 639-1 code. Falls back to 'en' on failure or short input.
+    Supports all major languages without LLM overhead.
     """
     if not text or len(text.strip()) < 3:
         return "en"
-
-    for ch in text:
-        if '\u4e00' <= ch <= '\u9fff':
-            return "zh"
-        if '\u3040' <= ch <= '\u309f' or '\u30a0' <= ch <= '\u30ff':
-            return "ja"
-        if '\uac00' <= ch <= '\ud7af':
-            return "ko"
-        if '\u0e00' <= ch <= '\u0e7f':
-            return "th"
-        if '\u0600' <= ch <= '\u06ff':
-            return "ar"
-        if '\u0900' <= ch <= '\u097f':
-            return "hi"
-
-    es_unique = set("¿¡ñ")
-    text_lower = text.lower()
-    if any(c in es_unique for c in text_lower):
-        return "es"
-
-    vi_unique = set("ăâđêôơưằẳẵắặầẩẫấậẻẽẹềểễếệỉĩịỏọồổỗốộờởỡớợủụừửữứựỳỷỹỵ")
-    vi_shared = set("àảãáạèéẹìíịòóọùúụỳýỵ")
-    vi_unique_count = sum(1 for c in text_lower if c in vi_unique)
-    vi_shared_count = sum(1 for c in text_lower if c in vi_shared)
-
-    if vi_unique_count >= 1:
-        return "vi"
-    if vi_unique_count == 0 and vi_shared_count >= 2:
-        vi_words = {"bạn", "tôi", "của", "không", "này", "một", "chào", "xin", "giúp"}
-        words_in_text = set(text_lower.split())
-        if words_in_text & vi_words:
-            return "vi"
-
-    es_accents = set("áéíóú")
-    es_accent_count = sum(1 for c in text_lower if c in es_accents)
-    if es_accent_count >= 1:
-        return "es"
-
-    return "en"
-
-
-def _generate_immersion_anchor(
-    char_name: str,
-    system_prompt: str,
-    lang_code: str,
-) -> dict:
-    """Generate a language-specific immersion anchor pair via LLM.
-
-    Returns:
-        {"prompt": str, "response": str} or empty dict on failure.
-    """
-    lang_name = _LANG_NAMES.get(lang_code, "English")
-
-    if lang_code == "en":
-        prompt = f"{char_name}, describe what you see right now."
-    else:
-        prompt_translations = {
-            "vi": f"{char_name}, kể cho tôi nghe bạn đang nhìn thấy gì.",
-            "es": f"{char_name}, dime qué ves en este momento.",
-            "pt": f"{char_name}, me conte o que você está vendo agora.",
-            "id": f"{char_name}, ceritakan apa yang kamu lihat sekarang.",
-            "de": f"{char_name}, erzähl mir was du gerade siehst.",
-            "fr": f"{char_name}, dis-moi ce que tu vois en ce moment.",
-            "ja": f"{char_name}、今何が見えるか教えて。",
-            "ko": f"{char_name}, 지금 뭐가 보여?",
-            "zh": f"{char_name}，告诉我你现在看到了什么。",
-            "th": f"{char_name} บอกฉันว่าคุณเห็นอะไรตอนนี้",
-            "ru": f"{char_name}, расскажи что ты сейчас видишь.",
-        }
-        prompt = prompt_translations.get(
-            lang_code, f"{char_name}, describe what you see right now."
-        )
-
-    gen_prompt = IMMERSION_GEN_TEMPLATE.format(
-        char_name=char_name,
-        language=lang_name,
-    )
-
     try:
-        response = chat_complete(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": gen_prompt},
-            ],
-            temperature=0.7,
-            max_tokens=200,
-        )
-
-        if response and len(response.strip()) > 20:
-            logger.info(
-                f"Generated immersion anchor for {char_name} [{lang_code}]: "
-                f"{len(response)} chars"
-            )
-            return {"prompt": prompt, "response": response.strip()}
-
-    except Exception as e:
-        logger.warning(f"Immersion gen failed for {char_name} [{lang_code}]: {e}")
-
-    return {}
+        from langdetect import detect
+        code = detect(text)
+        # langdetect may return codes like 'zh-cn' / 'zh-tw' → normalize
+        if code.startswith("zh"):
+            return "zh"
+        return code if code in LANG_NAMES else "en"
+    except Exception:
+        return "en"
 
 
-def get_immersion_anchor(
+# ═══════════════════════════════════════════════════════════════
+# IMMERSION ANCHOR CACHE
+# ═══════════════════════════════════════════════════════════════
+
+def _get_or_create_anchor(
     character_key: str,
     char_name: str,
     system_prompt: str,
     lang_code: str,
 ) -> dict:
-    """Get immersion anchor from Redis, or generate + cache it.
+    """Retrieve immersion anchor from Redis cache, or generate + cache it.
+
+    Delegates generation to characters.generator.generate_immersion_anchor()
+    which enforces: THIRD PERSON, 100% target language, body contradiction,
+    sensory detail, 100-150 words — matching V3.2.3 spec.
 
     Redis key: "immersion:{character_key}:{lang_code}"
-    Shared across ALL users and server instances.
 
     Returns:
-        {"prompt": str, "response": str} or empty dict
+        {"prompt": str, "response": str} or empty dict on failure.
     """
     redis_key = f"immersion:{character_key}:{lang_code}"
 
-    # Try Redis first
     cached = cache_get(redis_key)
     if cached:
         return cached
 
-    # Generate new anchor
-    anchor = _generate_immersion_anchor(char_name, system_prompt, lang_code)
+    lang_name = LANG_NAMES.get(lang_code, "English")
+    anchor = _gen_anchor(
+        llm_call_fn=chat_complete,
+        system_prompt=system_prompt,
+        name=char_name,
+        language=lang_name,
+    )
+
+    if not anchor:
+        logger.warning("Immersion anchor generation failed: %s", redis_key)
+        return {}
+
+    result = {
+        "prompt": anchor["anchor_user"],
+        "response": anchor["anchor_assistant"],
+    }
+    cache_set(redis_key, result)
+    logger.info("Cached immersion anchor: %s (%d chars)", redis_key, len(result["response"]))
+    return result
+
+
+# ═══════════════════════════════════════════════════════════════
+# SYSTEM PROMPT ASSEMBLY
+# ═══════════════════════════════════════════════════════════════
+
+def _build_system_prompt(
+    char: dict,
+    user_name: str,
+    lang_code: str,
+    affection_context: str = "",
+    memory_context: str = "",
+    scene_context: str = "",
+) -> str:
+    """Assemble the multi-layer system prompt.
+
+    Layer order matters — later layers override earlier ones in model attention.
+    """
+    system = char["system_prompt"].replace("{{user}}", user_name)
+
+    if affection_context:
+        system += f"\n\n{affection_context}"
+
+    if memory_context:
+        system += f"\n\n{memory_context}"
+
+    if scene_context:
+        system += f"\n\n{scene_context}"
+
+    system += FORMAT_ENFORCEMENT
+
+    lang_name = LANG_NAMES.get(lang_code, "English")
+    system += LANGUAGE_ENFORCEMENT.format(lang_name=lang_name)
+
+    return system
+
+
+def _inject_immersion_anchor(
+    messages: list[dict],
+    char: dict,
+    character_key: str,
+    system_prompt: str,
+    lang_code: str,
+    has_user_message: bool,
+) -> None:
+    """Inject the language-appropriate immersion anchor into the message list.
+
+    Strategy:
+        1. Builtin characters with hardcoded anchors → use if language matches
+        2. Otherwise → generate/load from Redis for the detected language
+
+    This ensures mid-session language switches load the correct anchor.
+    """
+    builtin_lang = char.get("immersion_lang", "vi")
+    has_builtin = char.get("immersion_prompt") and char.get("immersion_response")
+
+    if has_builtin and lang_code == builtin_lang:
+        # Builtin hardcoded anchor matches user language — use directly
+        messages.append({"role": "user", "content": char["immersion_prompt"]})
+        messages.append({"role": "assistant", "content": char["immersion_response"]})
+        return
+
+    if not has_user_message:
+        return
+
+    # Dynamic anchor: generate or load from Redis
+    char_name = char.get("name", character_key)
+    anchor = _get_or_create_anchor(
+        character_key=character_key,
+        char_name=char_name,
+        system_prompt=system_prompt,
+        lang_code=lang_code,
+    )
     if anchor:
-        cache_set(redis_key, anchor)  # No TTL — immersion anchors are permanent
-        logger.info(f"Cached immersion anchor in Redis: {redis_key}")
-    return anchor
+        messages.append({"role": "user", "content": anchor["prompt"]})
+        messages.append({"role": "assistant", "content": anchor["response"]})
 
 
-# ── Main builder ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════
+# PUBLIC API
+# ═══════════════════════════════════════════════════════════════
 
 def build_messages_full(
     character_key: str,
@@ -221,66 +238,60 @@ def build_messages_full(
     affection_context: str = "",
     user_message: str = "",
 ) -> list[dict]:
-    """Build the full message list for LLM.
+    """Build the complete LLM message list for a single chat turn.
+
+    Message structure:
+        [system]     — multi-layer system prompt
+        [user]       — immersion anchor trigger (fake history)
+        [assistant]  — immersion anchor response (fake history)
+        [user/asst]  — real conversation window (last 7 turns)
+        [system]     — language reminder (non-English only, exploits recency bias)
 
     Args:
-        character_key: Character identifier
-        conversation_window: Recent chat messages (7 turns max)
-        user_name: User's display name
-        total_turns: Total turns so far
-        memory_context: TODO — Qdrant semantic recall
-        scene_context: [CURRENT SCENE] block from SceneTracker
-        affection_context: [CHARACTER INTERNAL STATE] block from AffectionState
-        user_message: Current user message (for language detection)
+        character_key:       Character identifier (e.g. "kael", "yuki")
+        conversation_window: Recent chat messages (sliding window, 7 turns max)
+        user_name:           User's display name for {{user}} substitution
+        total_turns:         Total turns so far (for pacing decisions)
+        memory_context:      [MEMORY] block from Qdrant (TODO)
+        scene_context:       [CURRENT SCENE] block from SceneTracker
+        affection_context:   [CHARACTER INTERNAL STATE] from AffectionState
+        user_message:        Current user message (used for language detection)
+
+    Returns:
+        List of message dicts ready for LLM API call.
     """
-    all_chars = get_all_characters()
-    char = all_chars[character_key]
+    char = get_all_characters()[character_key]
+    lang_code = detect_language(user_message) if user_message else "en"
 
-    # Base system prompt with user name substitution
-    system = char["system_prompt"].replace("{{user}}", user_name)
+    # 1. System prompt (multi-layer)
+    system_prompt = _build_system_prompt(
+        char=char,
+        user_name=user_name,
+        lang_code=lang_code,
+        affection_context=affection_context,
+        memory_context=memory_context,
+        scene_context=scene_context,
+    )
+    messages = [{"role": "system", "content": system_prompt}]
 
-    # Layer: Affection state
-    if affection_context:
-        system += f"\n\n{affection_context}"
+    # 2. Immersion anchor (few-shot priming)
+    _inject_immersion_anchor(
+        messages=messages,
+        char=char,
+        character_key=character_key,
+        system_prompt=system_prompt,
+        lang_code=lang_code,
+        has_user_message=bool(user_message),
+    )
 
-    # Layer: Memory context (TODO: Qdrant)
-    if memory_context:
-        system += f"\n\n{memory_context}"
-
-    # Layer: Scene state
-    if scene_context:
-        system += f"\n\n{scene_context}"
-
-    # Layer: Format enforcement (always last)
-    system += FORMAT_ENFORCEMENT
-
-    messages = [{"role": "system", "content": system}]
-
-    # ── Immersion anchor injection ────────────────────────────
-    # Priority: builtin hardcoded > global cache > skip
-    immersion_injected = False
-
-    # 1. Builtin characters with hardcoded immersion
-    if char.get("immersion_prompt") and char.get("immersion_response"):
-        messages.append({"role": "user", "content": char["immersion_prompt"]})
-        messages.append({"role": "assistant", "content": char["immersion_response"]})
-        immersion_injected = True
-
-    # 2. UGC characters: global cache lookup (shared across all users)
-    if not immersion_injected and user_message:
-        lang = detect_language(user_message)
-        char_name = char.get("name", character_key)
-        anchor = get_immersion_anchor(
-            character_key=character_key,
-            char_name=char_name,
-            system_prompt=system,
-            lang_code=lang,
-        )
-        if anchor:
-            messages.append({"role": "user", "content": anchor["prompt"]})
-            messages.append({"role": "assistant", "content": anchor["response"]})
-
-    # Conversation history
+    # 3. Conversation history
     messages.extend(conversation_window)
+
+    # 4. Language reminder (recency bias — last thing model sees)
+    lang_name = LANG_NAMES.get(lang_code, "English")
+    messages.append({
+        "role": "system",
+        "content": LANGUAGE_REMINDER.format(lang_name=lang_name),
+    })
 
     return messages
