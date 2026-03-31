@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import chat, character, user
+from api.routes import auth, chat, character, user
 from api.middleware.rate_limit import RateLimitMiddleware
 from config import get_settings
 from core.db_buffer import flush as db_flush, get_pending_count, should_flush_early, FLUSH_INTERVAL
@@ -98,6 +98,7 @@ app.add_middleware(
 app.add_middleware(RateLimitMiddleware)
 
 # Routes
+app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(character.router)
 app.include_router(user.router)

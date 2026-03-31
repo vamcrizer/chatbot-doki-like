@@ -13,10 +13,38 @@ Usage in routes:
 import logging
 from dataclasses import dataclass, field
 
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from config import get_settings
 from core.redis_client import session_load, session_save
 
 logger = logging.getLogger("dokichat.deps")
+
+# ── Auth dependency ───────────────────────────────────────────
+
+_bearer_scheme = HTTPBearer()
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme),
+) -> str:
+    """FastAPI dependency: validate Bearer JWT, return user_id.
+
+    Raises 401 if token is missing, malformed, or expired.
+    Usage in routes:
+        current_user: str = Depends(get_current_user)
+    """
+    from api.auth import decode_access_token
+
+    user_id = decode_access_token(credentials.credentials)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user_id
 
 _settings = get_settings()
 

@@ -1,9 +1,20 @@
 """
 Character routes — list, create, delete, generate prompts and greetings.
+
+Public endpoints (no auth):
+  GET  /character/list
+  GET  /character/detail/{id}
+  POST /character/generate-prompt
+  POST /character/generate-greeting
+
+Protected endpoints (JWT required):
+  POST   /character/create
+  DELETE /character/delete
 """
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from api.deps import get_current_user
 from api.schemas import (
     CharacterSummary,
     CharacterListResponse,
@@ -31,11 +42,11 @@ def _llm_call_fn(messages: list, max_tokens: int = 1024) -> str:
 _service = CharacterService(llm_call_fn=_llm_call_fn)
 
 
-# ── List / Detail ─────────────────────────────────────────────
+# ── List / Detail (public) ────────────────────────────────────
 
 @router.get("/list", response_model=CharacterListResponse)
 async def list_characters():
-    """List all available characters (builtin + custom)."""
+    """List all available characters (builtin + custom). Public."""
     results = _service.list_all()
     summaries = []
     for c in results:
@@ -50,24 +61,24 @@ async def list_characters():
 
 @router.get("/detail/{character_id}")
 async def get_character_detail(character_id: str):
-    """Get character details (excluding full system prompt)."""
+    """Get character details (excluding full system prompt). Public."""
     detail = _service.get_detail(character_id)
     if not detail:
         raise HTTPException(404, f"Character '{character_id}' not found")
     return detail
 
 
-# ── Generate (no save) ────────────────────────────────────────
+# ── Generate (public, no save) ────────────────────────────────
 
 @router.post("/generate-prompt", response_model=GeneratePromptResponse)
 async def generate_prompt(req: GeneratePromptRequest):
-    """Generate a system prompt from C.AI fields. Does NOT save.
+    """Generate a system prompt from C.AI fields. Does NOT save. Public.
 
     User reviews the result, optionally edits, then calls /create.
     """
     try:
         result = _service.gen_prompt(
-            bio=req.bio,  # computed property: combines subtitle + description + definition
+            bio=req.bio,
             name=req.name,
             gender=req.gender,
             content_mode=req.content_mode,
@@ -83,16 +94,13 @@ async def generate_prompt(req: GeneratePromptRequest):
 
 @router.post("/generate-greeting", response_model=GenerateGreetingResponse)
 async def generate_greeting(req: GenerateGreetingRequest):
-    """Generate ONE greeting. This is the "Viết cho tôi" button.
-
-    User can call this multiple times to build greetings_alt[].
-    """
+    """Generate ONE greeting ("Viết cho tôi" button). Public."""
     try:
         greeting = _service.gen_greeting(
-            bio=req.bio,  # computed property
+            bio=req.bio,
             name=req.name,
             gender=req.gender,
-            personality=req.personality,  # computed property
+            personality=req.personality,
             existing_greetings=req.existing_greetings,
         )
         return GenerateGreetingResponse(
@@ -104,29 +112,33 @@ async def generate_greeting(req: GenerateGreetingRequest):
         raise HTTPException(500, f"Generation failed: {e}")
 
 
-# ── Create (save) ─────────────────────────────────────────────
+# ── Create / Delete (protected) ───────────────────────────────
 
 @router.post("/create", response_model=CharacterCreateResponse)
-async def create_character(req: CharacterCreateRequest):
-    """Save a new character. User provides all data including system_prompt.
+async def create_character(
+    req: CharacterCreateRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Save a new character. Requires auth.
 
     Typical flow:
     1. POST /generate-prompt → get system_prompt
     2. User reviews/edits prompt
-    3. POST /generate-greeting (optional, "Viết cho tôi") → get greeting(s)
+    3. POST /generate-greeting (optional) → get greeting(s)
     4. POST /create → save everything
     """
     try:
         result = _service.create(
             name=req.name,
             gender=req.gender,
-            bio=req.bio,  # computed property
+            bio=req.bio,
             system_prompt=req.system_prompt,
             opening_scene=req.opening_scene,
             greetings_alt=req.greetings_alt,
             content_mode=req.content_mode,
             pacing=req.pacing,
         )
+        logger.info("Character created by user %s: %s", current_user, result["key"])
         return CharacterCreateResponse(
             id=result["key"],
             name=result["name"],
@@ -139,11 +151,13 @@ async def create_character(req: CharacterCreateRequest):
         raise HTTPException(500, f"Creation failed: {e}")
 
 
-# ── Delete ────────────────────────────────────────────────────
-
 @router.delete("/delete")
-async def delete_character_endpoint(req: CharacterDeleteRequest):
-    """Delete a custom character. Cannot delete builtin characters."""
+async def delete_character_endpoint(
+    req: CharacterDeleteRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Delete a custom character. Requires auth. Cannot delete builtin characters."""
     if not _service.delete(req.id):
         raise HTTPException(400, f"Cannot delete '{req.id}' (builtin or not found)")
+    logger.info("Character %s deleted by user %s", req.id, current_user)
     return {"status": "ok", "message": f"Character '{req.id}' deleted"}

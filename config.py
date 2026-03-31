@@ -35,6 +35,11 @@ class Settings:
     DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
     REDIS_URL: str = os.environ.get("REDIS_URL", "")  # TODO: session + chat window storage
 
+    # ── Auth (JWT) ────────────────────────────────────────────
+    JWT_SECRET_KEY: str = os.environ.get("JWT_SECRET_KEY", "change-me-in-production-use-long-random-secret")
+    JWT_ACCESS_EXPIRE_MINUTES: int = int(os.environ.get("JWT_ACCESS_EXPIRE_MINUTES", "30"))
+    JWT_REFRESH_EXPIRE_DAYS: int = int(os.environ.get("JWT_REFRESH_EXPIRE_DAYS", "7"))
+
     # ── Content ───────────────────────────────────────────────
     DEFAULT_CONTENT_MODE: str = os.environ.get("DEFAULT_CONTENT_MODE", "romantic")
 
