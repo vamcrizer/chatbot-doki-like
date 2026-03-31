@@ -12,6 +12,7 @@ Token storage convention (client responsibility):
   refresh_token — HttpOnly cookie or secure storage; long-lived (7 days)
 """
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,7 +25,10 @@ from api.auth import (
     verify_password,
 )
 from api.deps import get_current_user, get_user_repo
-from api.schemas import LoginRequest, RefreshRequest, RegisterRequest, TokenResponse
+from api.schemas import (
+    LoginRequest, OAuthAuthorizeResponse, OAuthCallbackRequest,
+    RefreshRequest, RegisterRequest, TokenResponse,
+)
 from config import get_settings
 
 logger = logging.getLogger("dokichat.auth")
@@ -182,3 +186,118 @@ async def get_me(current_user: str = Depends(get_current_user)):
         "display_name": user.get("display_name", ""),
         "content_mode": user.get("content_mode", "romantic"),
     }
+
+
+# ── OAuth — Step 1: Get authorization URL ─────────────────────
+
+@router.get("/oauth/{provider}", response_model=OAuthAuthorizeResponse)
+async def oauth_authorize(provider: str, redirect_uri: str):
+    """Return the provider's authorization URL.
+
+    The client redirects the user to this URL. After the user approves,
+    the provider redirects to redirect_uri with ?code=...&state=...
+
+    The state parameter must be round-tripped back in the /callback call
+    for CSRF protection.
+
+    Supported providers: google, apple
+    """
+    from api.oauth import get_provider
+
+    try:
+        p = get_provider(provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    state = secrets.token_urlsafe(16)
+
+    # Persist state in Redis (10 min TTL) for server-side CSRF validation
+    _store_oauth_state(state)
+
+    return OAuthAuthorizeResponse(
+        authorization_url=p.authorization_url(redirect_uri, state),
+        state=state,
+        provider=provider,
+    )
+
+
+# ── OAuth — Step 2: Exchange code for tokens ──────────────────
+
+@router.post("/oauth/{provider}/callback", response_model=TokenResponse)
+async def oauth_callback(provider: str, req: OAuthCallbackRequest):
+    """Exchange authorization code for DokiChat access + refresh tokens.
+
+    Called by the client after receiving the code from the provider's redirect.
+
+    For Apple: pass `name` when available (only present on first login).
+    For CSRF: pass the `state` returned from GET /auth/oauth/{provider}.
+    """
+    from api.oauth import get_provider
+
+    # CSRF: validate state if Redis is available
+    if req.state:
+        if not _consume_oauth_state(req.state):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired state parameter",
+            )
+
+    try:
+        p = get_provider(provider)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    try:
+        oauth_user = p.exchange_code(
+            code=req.code,
+            redirect_uri=req.redirect_uri,
+            name=req.name,
+        )
+    except Exception as e:
+        logger.warning("OAuth %s exchange failed: %s", provider, e)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"OAuth code exchange failed: {e}",
+        )
+
+    if not oauth_user.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="OAuth provider did not return an email address",
+        )
+
+    repo = get_user_repo()
+    user = repo.find_or_create_oauth_user(
+        email=oauth_user.email,
+        display_name=oauth_user.display_name,
+        provider=provider,
+    )
+
+    logger.info("OAuth login: provider=%s user=%s", provider, user["id"])
+    return _issue_tokens(user)
+
+
+# ── OAuth state helpers (CSRF) ────────────────────────────────
+
+_STATE_TTL = 600  # 10 minutes
+
+
+def _store_oauth_state(state: str) -> None:
+    """Persist OAuth state in Redis (best-effort; skipped if Redis unavailable)."""
+    from core.redis_client import get_redis
+    r = get_redis()
+    if r:
+        r.setex(f"oauth_state:{state}", _STATE_TTL, "1")
+
+
+def _consume_oauth_state(state: str) -> bool:
+    """Validate and delete OAuth state. Returns True if valid.
+
+    Falls back to True when Redis is unavailable (fail-open).
+    """
+    from core.redis_client import get_redis
+    r = get_redis()
+    if not r:
+        return True  # No Redis — skip CSRF check (log warning in production)
+    deleted = r.delete(f"oauth_state:{state}")
+    return bool(deleted)

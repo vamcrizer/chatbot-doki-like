@@ -56,6 +56,30 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class OAuthAuthorizeResponse(BaseModel):
+    """Response for GET /auth/oauth/{provider} — redirect the user here."""
+    authorization_url: str
+    state: str
+    provider: str
+
+
+class OAuthCallbackRequest(BaseModel):
+    """Request body for POST /auth/oauth/{provider}/callback.
+
+    The client exchanges the code it received from the provider's redirect.
+
+    Fields:
+      code          — authorization code from provider
+      redirect_uri  — must exactly match what was used in the authorization URL
+      state         — state value received from provider (for CSRF check)
+      name          — display name (Apple only: sent on FIRST login in form_post)
+    """
+    code: str
+    redirect_uri: str
+    state: str = ""
+    name: Optional[str] = None
+
+
 # ── Chat ──────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):

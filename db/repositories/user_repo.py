@@ -101,6 +101,24 @@ class InMemoryUserRepository(BaseRepository):
         for h in to_delete:
             del self._tokens[h]
 
+    # ── OAuth ─────────────────────────────────────────────────
+
+    def find_or_create_oauth_user(self, email: str, display_name: str, provider: str) -> dict:
+        """Find existing user by email or create a new OAuth-only account.
+
+        Email is the link between OAuth and password accounts:
+        - If an account with this email exists → return it (auto-link)
+        - Otherwise → create new account (no password set)
+        """
+        user = self.find_by_email(email)
+        if user:
+            return user
+        return self.create({
+            "email": email,
+            "password_hash": "",  # OAuth-only; set via POST /auth/set-password later
+            "display_name": display_name or email.split("@")[0],
+        })
+
 
 class PostgresUserRepository(BaseRepository):
 
@@ -216,6 +234,19 @@ class PostgresUserRepository(BaseRepository):
         with self._sf() as session:
             session.query(AuthToken).filter_by(user_id=user_id).delete()
             session.commit()
+
+    # ── OAuth ─────────────────────────────────────────────────
+
+    def find_or_create_oauth_user(self, email: str, display_name: str, provider: str) -> dict:
+        """Find existing user by email or create a new OAuth-only account."""
+        user = self.find_by_email(email)
+        if user:
+            return user
+        return self.create({
+            "email": email,
+            "password_hash": "",
+            "display_name": display_name or email.split("@")[0],
+        })
 
     @staticmethod
     def _to_dict(user) -> dict:
