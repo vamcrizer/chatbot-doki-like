@@ -11,7 +11,7 @@ from datetime import datetime
 from db.repositories.base import BaseRepository
 
 if TYPE_CHECKING:
-    from core.db_buffer import PendingMessage
+    from core.db_buffer import PendingMessage, PendingAffection
 
 logger = logging.getLogger("ai_companion.repo.chat")
 
@@ -201,15 +201,19 @@ class PostgresChatRepository(BaseRepository):
                         session.add(conv)
                         session.flush()  # get conv.id
 
-                    # Bulk insert messages
+                    # Bulk insert messages with DO NOTHING on conflict
+                    from sqlalchemy.dialects.postgresql import insert as pg_insert
+                    
                     for msg in messages:
-                        chat_msg = ChatMessage(
+                        stmt = pg_insert(ChatMessage).values(
                             conversation_id=conv.id,
                             role=msg.role,
                             content=msg.content,
                             turn_number=msg.turn_number,
+                        ).on_conflict_do_nothing(
+                            index_elements=['conversation_id', 'turn_number']
                         )
-                        session.add(chat_msg)
+                        session.execute(stmt)
 
                     # Update conversation metadata
                     conv.turn_count += sum(1 for m in messages if m.role == "assistant")
@@ -221,6 +225,57 @@ class PostgresChatRepository(BaseRepository):
                 session.rollback()
                 raise
 
+        return count
+
+    def bulk_upsert_affections(self, items: "list[PendingAffection]") -> int:
+        """Batch upsert affection states from write-behind buffer.
+        Latest state overwrites the older state for the same user-character pair.
+        """
+        from db.models import AffectionState
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        if not items:
+            return 0
+            
+        # Deduplicate: only keep the newest state per (user_id, character_id) in the batch
+        deduped = {}
+        for item in items:
+            key = (item.user_id, item.character_id)
+            deduped[key] = item
+            
+        count = 0
+        with self._sf() as session:
+            try:
+                for item in deduped.values():
+                    stmt = pg_insert(AffectionState).values(
+                        user_id=item.user_id,
+                        character_id=item.character_id,
+                        score=item.score,
+                        stage=item.stage,
+                        total_turns=item.total_turns,
+                        scene_state=item.scene_state,
+                        emotion_state=item.emotion_state,
+                        last_interaction=item.last_interaction
+                    )
+                    
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=['user_id', 'character_id'],
+                        set_=dict(
+                            score=stmt.excluded.score,
+                            stage=stmt.excluded.stage,
+                            total_turns=stmt.excluded.total_turns,
+                            scene_state=stmt.excluded.scene_state,
+                            emotion_state=stmt.excluded.emotion_state,
+                            last_interaction=stmt.excluded.last_interaction
+                        )
+                    )
+                    session.execute(stmt)
+                    count += 1
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+                
         return count
 
     @staticmethod

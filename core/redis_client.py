@@ -98,14 +98,13 @@ def cache_set(key: str, value: dict, ttl_seconds: int = 0) -> bool:
 # SESSION HELPERS — with TTL auto-expiry
 # ══════════════════════════════════════════════════════════════
 
-SESSION_TTL = 1800  # 30 minutes — session auto-expires when user stops chatting
-
+SESSION_TTL = 108000  # 30 hours — session auto-expires when user stops chatting
 
 def session_save(user_id: str, character_id: str, data: dict) -> bool:
     """Save session state to Redis with TTL.
 
-    Every save resets the 30-minute TTL timer.
-    When user stops chatting, session auto-deletes from Redis.
+    Every save resets the 30-hour TTL timer.
+    When user stops chatting for > 1 day, session auto-deletes from Redis.
     """
     key = f"session:{user_id}:{character_id}"
     return cache_set(key, data, ttl_seconds=SESSION_TTL)

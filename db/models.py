@@ -126,6 +126,8 @@ class Character(Base):
 
     # Internal
     bio_original = Column(Text, default="")
+    # Emotional state definitions template (NOT per-user state)
+    # Per-user state is stored in affection_states table
     emotional_states = Column(JSONB, nullable=False, default=dict)
 
     # Timestamps
@@ -192,6 +194,7 @@ class ChatMessage(Base):
 
     __table_args__ = (
         CheckConstraint("role IN ('user', 'assistant')", name="ck_msg_role"),
+        UniqueConstraint("conversation_id", "turn_number", name="uq_msg_conv_turn"),
         Index("idx_msg_conv", "conversation_id", "created_at"),
     )
 
@@ -208,12 +211,12 @@ class Memory(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    character_id = Column(UUID(as_uuid=True), nullable=False)
+    character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False)
 
     text = Column(Text, nullable=False)
     type = Column(String(30), nullable=False, default="user_fact")
     confidence = Column(Float, default=0.8)
-    superseded_by = Column(UUID(as_uuid=True), nullable=True)
+    superseded_by = Column(UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True)
 
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_accessed = Column(DateTime(timezone=True), server_default=func.now())
@@ -234,8 +237,8 @@ class SessionSummary(Base):
     __tablename__ = "session_summaries"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), nullable=False)
-    character_id = Column(UUID(as_uuid=True), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    character_id = Column(UUID(as_uuid=True), ForeignKey("characters.id", ondelete="CASCADE"), nullable=False)
 
     summary = Column(Text, nullable=False)
     turn_range = Column(String(20), nullable=True)

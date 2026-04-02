@@ -40,7 +40,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 # ── Background Tasks ──────────────────────────────────────────
 
-async def _update_affection_bg(session, user_msg: str, assistant_msg: str, char_name: str):
+async def _update_affection_bg(session, user_msg: str, assistant_msg: str, char_name: str, user_id: str, char_id: str):
     """Update affection state in background (non-blocking).
 
     Runs extract_affection_update (may call LLM) then saves
@@ -59,6 +59,17 @@ async def _update_affection_bg(session, user_msg: str, assistant_msg: str, char_
                 character_name=char_name,
             )
             save_session(session)
+            
+            from core.db_buffer import enqueue_affection
+            enqueue_affection(
+                user_id=user_id,
+                character_id=char_id,
+                score=session.affection.relationship_score if hasattr(session.affection, 'relationship_score') else 0,
+                stage=session.affection.relationship_label if hasattr(session.affection, 'relationship_label') else "stranger",
+                total_turns=session.conversation.total_turns,
+                scene_state=session.scene.get_state_dict() if hasattr(session.scene, 'get_state_dict') else {},
+                emotion_state="neutral",
+            )
             logger.debug("Affection updated: %s", session.affection.relationship_score)
     except Exception as e:
         logger.warning("Background affection update error: %s", e)
@@ -154,7 +165,7 @@ async def chat_stream_endpoint(
 
             # Background: affection update (async — may call LLM)
             asyncio.create_task(_update_affection_bg(
-                session, req.message, processed, char_name,
+                session, req.message, processed, char_name, user_id, req.character_id
             ))
 
             yield {

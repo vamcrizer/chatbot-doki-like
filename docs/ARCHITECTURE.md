@@ -39,15 +39,14 @@ CLOUDFLARE EDGE
 API POD ×2 — RunPod CPU $0.16/hr
   (FastAPI async, uvicorn 4 workers)
       │
-      ├── asyncio.gather ──► Upstash Redis   (session, rate limit)
-      └── asyncio.gather ──► Neon PostgreSQL (profile/bio)
+      ├── asyncio.gather ──► Upstash Redis   (session, rate limit, bio)
+      └── [Phase 2] ───────► Neon PostgreSQL (profile/bio realtime)
       │
       │ POST /v1/chat/completions
       │ header: x-user-id: {user_id}
       ▼
-VLLM ROUTER — RunPod CPU $0.03/hr
-  (Rust, ~50MB RAM)
-  đọc vllm:num_requests_waiting mỗi 1s
+VLLM ROUTER [Mục tiêu Phase 2] — RunPod CPU $0.03/hr
+  đọc vllm:num_requests_waiting mỗi 300ms
       │
       ├── GPU #1 waiting=2  ◄── route vào đây ✅ (Session Affinity)
       └── GPU #2 waiting=15
@@ -77,18 +76,21 @@ Hệ thống được thiết kế để xử lý toàn bộ logic trong vòng `
         │
 ④ Load Session (Redis)                      ~5ms
    Redis GET session:{user_id}:{char_id} ← Load Session định dạng JSON
-   [TODO: Phase 2] Parallel fetch Neon PG SELECT bio FROM users
+   [Phân vùng dữ liệu Bio]:
+    - Phase 1: `bio` được load thẳng ra cùng json session từ Redis (có được cache lúc user update profile).
+    - Phase 2: Parallel fetch (Neon PG `SELECT bio FROM users`) để lấy thông tin mới nhất bỏ qua cache nếu cần.
         │
 ⑤ Build prompt (4 Layers)
    [system]:    bio của user + Character Prompt (~3500 tok) + Affection/Scene (~130 tok)
+   [summary]:   session_summaries gần nhất (nếu có - tóm tắt bối cảnh cũ)
    [messages]:  Sliding Window từ Redis (7 turns)
    [user]:      tin nhắn mới
         │
-⑥ POST → vLLM Router                        ~1ms
-   header x-user-id → session affinity (route về đúng GPU có sẵn Cache)
+⑥ POST → GPU Pod (hoặc Router trong Phase 2)  ~1ms
+   API Pod đính kèm `X-Callback-URL: http://pod-X.internal:8000/stream/{request_id}`
         │
-⑦ Router chọn GPU ít waiting nhất
-   route vào GPU, ghi nhớ callback URL của API Pod
+⑦ GPU Pod (hoặc Router) xử lý chọn luồng
+   GPU biết chính xác gọi về API Pod nào nhờ URL truyền ở bước 6
         │
 ⑧ vLLM stream tokens                        TTFT ~200–500ms
    qua runpod.internal (private network)
@@ -99,9 +101,10 @@ Hệ thống được thiết kế để xử lý toàn bộ logic trong vòng `
    header Cache-Control: no-cache
         │
 ⑩ Hậu kỳ (Background Tasks — KHÔNG BLOCK USER)
-   - [Đã có]: Gọi save_session() đè lại state vào Redis, update TTL 30 phút.
+   - [Đã có]: Gọi save_session() đè lại state vào Redis, update TTL 30 giờ.
    - [Đã có]: Hàm extract_affection_update chạy Async Background (asyncio.create_task).
-   - [Đã có]: DB Write-Behind — enqueue() vào buffer, flush mỗi 30s xuống Neon PostgreSQL.
+   - [Đã có]: DB Write-Behind — `XADD` vào Redis Streams (`db_write:stream:messages` & `db_write:stream:affections`). Consumer Group Worker `XREADGROUP` mỗi 30s, flush xuống Postgres bằng UPSERT, chỉ `XACK` sau khi ghi thành công. Pod crash không mất data vì message vẫn chờ trong stream.
+   - [Memory]: Nếu turn_count % 50 == 0 → trigger background job gọi LLM tóm tắt 50 turns vừa qua → `XADD` vào stream tương ứng → flush xuống bảng `session_summaries`.
 ```
 
 ---
@@ -120,11 +123,11 @@ Hệ thống được thiết kế để xử lý toàn bộ logic trong vòng `
 - **Start command**: `gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --timeout 120`
 - **OS tuning bắt buộc**: `nofile limit = 65535` (không tune → crash ở 1024 connections).
 - **Port**: expose 8000 public qua Cloudflare.
-- **Load Balancing**: 2 pods qua Cloudflare DNS round-robin hoặc Nginx nhỏ.
+- **Load Balancing**: Sử dụng Cloudflare Tunnel bật Session Affinity (Cookie-based / Sticky Session) trỏ cứng về 1 API Pod. Chặn triệt để DNS Round-robin làm đứt gãy Stream kết nối SSE dở dang.
 
 ### 4.3 Upstash Redis (Session & Rate Limit)
 Trái tim của hệ thống **Zero Server Memory**. Tất cả RAM của server là trống, state nằm ở đây.
-- **TTL Session**: 30 phút (Tiết kiệm cực độ tài nguyên bộ nhớ).
+- **TTL Session**: 30 giờ (Đủ khoảng không thời gian cho user dừng chat lâu không bị timeout mất luồng cảm xúc).
 - **Global Anchor**: Cache mỏ neo ngôn ngữ (`immersion:{char}:{lang}`). 10k users xài chung tốn 1 lần prompt.
 - **Rate limit (sliding window counter)**: `[Đã implement — core/rate_limit.py]`
   ```python
@@ -135,19 +138,12 @@ Trái tim của hệ thống **Zero Server Memory**. Tất cả RAM của server
   ```
 
 ### 4.4 Neon PostgreSQL (Source of Truth)
-- **Connection**: dùng **pooled URL** (`-pooler` trong hostname) — PgBouncer built-in, transaction mode.
-- **Write-Behind Pattern**: `core/db_buffer.py` enqueue() mỗi request, background worker flush() mỗi 30s hoặc khi queue > 100 messages.
-- **Schema Cốt Lõi**:
-  ```sql
-  CREATE TABLE users (id UUID PRIMARY KEY, bio TEXT);
-  CREATE TABLE messages (
-      id UUID PRIMARY KEY, conv_id UUID NOT NULL, 
-      role TEXT, content TEXT, created_at TIMESTAMPTZ
-  );
-  CREATE INDEX ON messages (conv_id, created_at DESC);
-  ```
+- **Connection**: dùng **transaction pooled mode** (`-pooler`, PgBouncer built-in). Do dùng **SQLAlchemy ORM**, bắt buộc cấu hình `NullPool` và vô hiệu hóa *prepared statements* để tương thích.
+- **Write-Behind Pattern**: Dịch chuyển sang cấu trúc queue phân tán bền vững. Luồng ghi được đẩy `XADD` vào **Redis Streams**. Một Consumer Group Worker chạy ngầm, cứ 30s `XREADGROUP` một mẻ và flush xuống Postgres bằng UPSERT. Chỉ khi record vào DB thành công, Worker mới gọi `XACK` để xóa message khỏi Redis Stream. Đảm bảo cấu trúc an toàn tuyệt đối ngay cả khi Worker rớt kết nối hay Pod đột ngột crash giữa chừng.
+- **Schema**: Xem `migrations/001_init.sql`. Gồm 8 bảng: `users`, `auth_tokens`, `characters`, `conversations`, `chat_messages`, `memories`, `session_summaries`, `affection_states`.
 
-### 4.5 vLLM Router (RunPod CPU Pod)
+### 4.5 vLLM Router (RunPod CPU Pod) — [Mục tiêu Infra Phase 2]
+*(Bản hiện tại kết nối LLM trực tiếp. Router sẽ được build Infra khi MAU scale)*
 - **Image**: `lmcache/lmstack-router:latest`
 - **Routing**: `session` mode — cùng `x-user-id` → cùng GPU → tái sử dụng KV Cache → giảm TTFT 30–50%.
 - **Fallback**: Tự chuyển request sang GPU khác nếu `waiting > threshold`.
@@ -159,12 +155,13 @@ Trái tim của hệ thống **Zero Server Memory**. Tất cả RAM của server
   - `--api-key YOUR_SECRET` (Khóa endpoint, chặn ai cũng có thể query lậu).
 - **Network Volume**: mount `/root/.cache/huggingface` để các pod GPU share chung file weights, giúp cold start Boot pod mới mất ~20s thay vì 3 phút tải weights.
 
-### 4.7 Cloudflare R2 & Grafana Cloud
-- **R2**: $0 Egress fee. File upload trực tiếp từ Mobile App qua Presigned URL.
-- **Grafana**:
-  - Alert nếu TTFT p95 > 3s.
-  - Alert nếu HTTP 500 rate > 5%.
-  - Alert nếu queue_waiting GPU > 50.
+### 4.7 Cloudflare R2 & Grafana Cloud — [Mục tiêu Mở rộng Phase 2]
+*(Chưa tích hợp API vào Source code hiện tại)*
+- **R2**: $0 Egress fee. Lưu trữ CDN Avatar, File upload trực tiếp qua Presigned URL.
+- **Grafana (Dự kiến)**:
+  - Cảnh báo TTFT p95 > 3s.
+  - Cảnh báo HTTP 500 rate > 5%.
+  - Cảnh báo xếp hàng chờ queue_waiting GPU > 50.
 
 ---
 
@@ -184,23 +181,26 @@ Trái tim của hệ thống **Zero Server Memory**. Tất cả RAM của server
 ├────────────────────────────────────────────┼───────────┤
 │ FIXED OVERHEAD (System Payload)            │   ~3,950  │
 │ Chat history (Sliding Window 7 turns)      │   ~2,000  │
+│ Session Summary (mid-term memory)          │     ~100  │
 │ Output Buffer (max_tokens)                 │     ~500  │
 ├────────────────────────────────────────────┼───────────┤
-│ TOTAL (max_model_len = 4096 / Context 8k)  │  ~6,450   │
+│ TOTAL (max_model_len = 8192)               │  ~6,550   │
 └────────────────────────────────────────────┴───────────┘
 ```
 
 ---
 
-## 6. Security (5 Lớp Bảo Vệ)
+## 6. Security (6 Lớp Bảo Vệ)
 
-1. **Input Filter**: Cấm các từ khóa nhạy cảm phi pháp ngay từ đầu (Regex).
-2. **Prompt Hard Rules**: 7 rules chìm trong từng prompt ngăn chặn AI break-character liên quan đến underage, violence.
-3. **Content Mode Toggle**:
+1. **Auth & Input Filter**: API Server dùng JWT Middleware để parse và verify User Identity. Header `x-user-id` truyền về vLLM là tuyệt đối an toàn và không bị giả mạo. Sau đó, chạy Regex cấm các từ khóa nhạy cảm phi pháp.
+2. **Internal Network Isolation**: Máy chủ vLLM Router và GPU Nodes không bao giờ mở Public Port. Chỉ có API Server được truy cập qua VPN nội bộ RunPod.
+3. **Prompt Hard Rules**: 7 rules chìm trong từng prompt ngăn chặn AI break-character liên quan đến underage, violence.
+4. **Content Mode Toggle**:
    - `romantic`: Chặn ở mức ôm hôn, fade to black (Default).
    - `explicit`: Opt-in 18+, miêu tả graphic, nhưng vẫn tuân thủ luật 1 & 2.
-4. **Model Level Alignment**: Gemma 3 IT đã được tune an toàn từ base.
-5. **Crisis Response**: Tự động vứt bỏ Persona và chèn hotline hỗ trợ tinh thần nếu phát hiện ý định tự hại (self-harm).
+5. **Model Level Alignment**: Gemma 3 IT đã được tune an toàn từ base.
+6. **Crisis Response**: Tự động vứt bỏ Persona và chèn hotline hỗ trợ tinh thần nếu phát hiện ý định tự hại (self-harm).
+
 
 ---
 
@@ -224,15 +224,18 @@ Trái tim của hệ thống **Zero Server Memory**. Tất cả RAM của server
 - [ ] API Pod: nofile limit = 65535
 - [ ] API Pod: gunicorn --timeout 120
 - [ ] Tất cả pods bật Global Networking cùng Data Center (RunPod)
-- [ ] GPU Pod: --api-key set, port không expose public
-- [ ] GPU Pod: --enable-prefix-caching ON
+- [ ] GPU Pod: --api-key set, port không expose public, chỉ expose cho API Router in internal network
+- [ ] GPU Pod: --enable-prefix-caching ON, sử dụng --max-model-len 8192
 - [ ] Network Volume mount cho LLM model weights
 
 **Database & Cache:**
 - [ ] Neon: dùng pooled connection string (-pooler)
+- [ ] SQLAlchemy: NullPool + statement_cache_size=0 (vì dùng Pgbouncer transaction mode)
 - [ ] Messages index: `(conv_id, created_at DESC)`
+- [ ] chat_messages: UNIQUE(conversation_id, turn_number) (chặn duplicate khi flush retry)
 - [ ] Redis: Cài đặt script đếm Rate Limit ZCARD
 - [ ] API: Worker batch flush DB chạy ngầm bằng `asyncio.create_task`
+- [ ] affection_states: write-behind qua Redis Streams (giống chat_messages)
 
 **Observability:**
 - [ ] Grafana alert TTFT p95 > 3s
